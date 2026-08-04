@@ -1,11 +1,59 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.3.0 --throttle 120",
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.3.0 --throttle 120",
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.3.0",
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.3.0 --throttle 120",
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.2.0",
+            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.3.0",
             "timeout": 20,
             "async": true
           }
@@ -17,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.2.0",
+            "command": "inlinr sync-ai --plugin claude-code-inlinr/0.3.0",
             "timeout": 20,
             "async": true
           }

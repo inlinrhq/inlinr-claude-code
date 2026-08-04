@@ -19,27 +19,21 @@ inlinr activate
 
 **Windows (PowerShell)**
 
-Download `inlinr-windows-amd64.exe` from
-[Releases](https://github.com/inlinrhq/inlinr-cli/releases/latest), rename it to
-`inlinr.exe`, and put its folder on your `PATH`:
-
 ```powershell
-mkdir "$env:LOCALAPPDATA\Inlinr\bin"
-# move inlinr.exe into that folder, then:
-[Environment]::SetEnvironmentVariable(
-  "Path",
-  [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:LOCALAPPDATA\Inlinr\bin",
-  "User"
-)
-```
-
-Close and reopen your terminal — a `PATH` change only reaches processes started
-after it. Then:
-
-```powershell
-inlinr --version
+irm https://inlinr.com/install.ps1 | iex
 inlinr activate
 ```
+
+The script verifies the published SHA-256 before installing, puts the binary in
+`%LOCALAPPDATA%\Inlinr\bin`, adds that to your `PATH`, and sets it for the
+current session as well — so `inlinr activate` works straight away rather than
+after a restart nobody expects.
+
+It also avoids the SmartScreen dialog you get downloading the `.exe` in a
+browser, and not by suppressing it: that warning comes from Mark-of-the-Web,
+and `Invoke-WebRequest` does not attach the tag that triggers it. Same binary,
+different provenance metadata. To install by hand instead, see the
+[CLI readme](https://github.com/inlinrhq/inlinr-cli#downloading-the-binary-by-hand).
 
 Finally, add the plugin:
 
@@ -57,10 +51,24 @@ is `<plugin>@<marketplace>`, and the repository name plays no part in it.
 
 ## What it does
 
-Two hooks, both running `inlinr sync-ai`: after each assistant turn (`Stop`) and
-when a session ends (`SessionEnd`).
+Six hooks, all running `inlinr sync-ai`. Two kinds:
 
-Both are `async`, so nothing waits on them. That is the real guarantee that a
+| Hook | Why |
+|---|---|
+| `UserPromptSubmit`, `PostToolUse`, `SubagentStop` | Throttled to one sync every two minutes. These make a long session show up *while* it happens rather than only at the end. |
+| `Stop`, `SessionEnd`, `PreCompact` | Unthrottled. These are the moments that mean "this is over" — a session that ends abruptly must not leave its last stretch unsynced. |
+
+It used to be two hooks — `Stop` and `SessionEnd` — which meant a four-hour
+session appeared in one lump at the end, and a crash before the end appeared
+not at all.
+
+The throttle lives in the CLI rather than in the hook, because that is where
+the state already is: a sync that ran a minute ago exits before touching the
+filesystem, so a hook firing on every tool call costs a process spawn and
+nothing else. Syncing is idempotent either way — a watermark means only new
+transcript lines are read, and a lock means two editors cannot double-count.
+
+All six are `async`, so nothing waits on them. That is the real guarantee that a
 tracker never costs you a turn — an exit code you have to get right is a weaker
 one. `inlinr sync-ai` also never exits non-zero, as a second line of defence.
 

@@ -1,6 +1,6 @@
 {
   "name": "inlinr",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Track time, tokens and AI-written lines from Claude Code on inlinr.com",
   "author": {
     "name": "Inlinr",
