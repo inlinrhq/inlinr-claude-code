@@ -29,6 +29,14 @@ The script verifies the published SHA-256 before installing, puts the binary in
 current session as well — so `inlinr activate` works straight away rather than
 after a restart nobody expects.
 
+**If you have Go, this is simpler and cannot trip an antivirus:**
+
+```
+go install github.com/inlinrhq/inlinr-cli/cmd/inlinr@latest
+```
+
+Nothing is downloaded as an executable, and the binary lands in your GOPATH bin.
+
 It also avoids the SmartScreen dialog you get downloading the `.exe` in a
 browser, and not by suppressing it: that warning comes from Mark-of-the-Web,
 and `Invoke-WebRequest` does not attach the tag that triggers it. Same binary,
