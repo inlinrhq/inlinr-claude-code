@@ -60,13 +60,15 @@ is `<plugin>@<marketplace>`, and the repository name plays no part in it.
 Two hooks, both running `inlinr sync-ai`: after each assistant turn (`Stop`) and
 when a session ends (`SessionEnd`).
 
-That is the entire plugin — there is no wrapper script. It used to ship one, a
-POSIX `sh` file, which meant the plugin silently did nothing on Windows.
-Invoking the CLI directly is resolved through `PATH` by every shell on every
-platform, and it moves the "never break the user's turn" guarantee into the CLI
-where it can be tested: `inlinr sync-ai` never exits non-zero. A `Stop` hook
-that fails interrupts what you were doing, and time tracking is never worth
-that.
+Both are `async`, so nothing waits on them. That is the real guarantee that a
+tracker never costs you a turn — an exit code you have to get right is a weaker
+one. `inlinr sync-ai` also never exits non-zero, as a second line of defence.
+
+That is the entire plugin — there is no wrapper script. It used to ship a POSIX
+`sh` file, which assumed every platform gives Claude Code an `sh` to run it
+with. Invoking the CLI directly removes the assumption: `PATH` lookup is
+something every shell does on every platform, and the "never break the turn"
+guarantee moves into the CLI where it is one line and can be tested.
 
 Everything else lives in the CLI: finding Claude Code's transcripts, counting
 tokens, computing line changes, resolving the git remote, rate-limiting, and

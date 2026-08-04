@@ -6,7 +6,8 @@
           {
             "type": "command",
             "command": "inlinr sync-ai --plugin claude-code-inlinr/0.2.0",
-            "timeout": 20
+            "timeout": 20,
+            "async": true
           }
         ]
       }
@@ -17,7 +18,8 @@
           {
             "type": "command",
             "command": "inlinr sync-ai --plugin claude-code-inlinr/0.2.0",
-            "timeout": 20
+            "timeout": 20,
+            "async": true
           }
         ]
       }
