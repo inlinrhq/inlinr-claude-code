@@ -1,0 +1,13 @@
+{
+  "name": "inlinr",
+  "version": "0.1.0",
+  "description": "Track time, tokens and AI-written lines from Claude Code on inlinr.com",
+  "author": {
+    "name": "Inlinr",
+    "url": "https://inlinr.com"
+  },
+  "homepage": "https://inlinr.com",
+  "repository": "https://github.com/inlinrhq/inlinr-claude-code",
+  "license": "BSD-3-Clause",
+  "keywords": ["time tracking", "productivity", "analytics", "inlinr"]
+}
