@@ -3,44 +3,75 @@
 Track your Claude Code sessions on [inlinr.com](https://inlinr.com) — time,
 token usage, and how many lines the assistant actually wrote.
 
+Works on macOS, Linux and Windows.
+
 ## Install
+
+The plugin runs the `inlinr` CLI, so install that first and make sure it is on
+your `PATH`.
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://inlinr.com/install.sh | sh
+inlinr activate
+```
+
+**Windows (PowerShell)**
+
+Download `inlinr-windows-amd64.exe` from
+[Releases](https://github.com/inlinrhq/inlinr-cli/releases/latest), rename it to
+`inlinr.exe`, and put its folder on your `PATH`:
+
+```powershell
+mkdir "$env:LOCALAPPDATA\Inlinr\bin"
+# move inlinr.exe into that folder, then:
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:LOCALAPPDATA\Inlinr\bin",
+  "User"
+)
+```
+
+Close and reopen your terminal — a `PATH` change only reaches processes started
+after it. Then:
+
+```powershell
+inlinr --version
+inlinr activate
+```
+
+Finally, add the plugin:
 
 ```sh
 claude plugin marketplace add inlinrhq/inlinr-claude-code
 claude plugin install inlinr@inlinr
 ```
 
-The marketplace is named `inlinr`, not `inlinr-claude-code` — the install
-target is `<plugin>@<marketplace>`, and the repository name plays no part in
-it.
+The marketplace is named `inlinr`, not `inlinr-claude-code` — the install target
+is `<plugin>@<marketplace>`, and the repository name plays no part in it.
 
-Then connect the machine once:
-
-```sh
-inlinr activate
-```
-
-The plugin needs the `inlinr` CLI on your `PATH`. If you already use the VS Code
-extension you have it — the plugin also looks in `~/.inlinr/bin`.
+> **The VS Code extension does not put the CLI on your PATH.** It downloads its
+> own copy into VS Code's private extension storage, where nothing else can find
+> it. If you use both, install the CLI separately as above.
 
 ## What it does
 
-The plugin is one shell script bound to two hooks. It runs `inlinr sync-ai`
-after each assistant turn (`Stop`) and when a session ends (`SessionEnd`).
+Two hooks, both running `inlinr sync-ai`: after each assistant turn (`Stop`) and
+when a session ends (`SessionEnd`).
+
+That is the entire plugin — there is no wrapper script. It used to ship one, a
+POSIX `sh` file, which meant the plugin silently did nothing on Windows.
+Invoking the CLI directly is resolved through `PATH` by every shell on every
+platform, and it moves the "never break the user's turn" guarantee into the CLI
+where it can be tested: `inlinr sync-ai` never exits non-zero. A `Stop` hook
+that fails interrupts what you were doing, and time tracking is never worth
+that.
 
 Everything else lives in the CLI: finding Claude Code's transcripts, counting
 tokens, computing line changes, resolving the git remote, rate-limiting, and
 queueing while offline. Keeping the parsing there means one implementation
-covers Claude Code in the terminal, in Claude Desktop, and inside VS Code —
-and it means this plugin has nothing to break.
-
-Two rules the hook never breaks:
-
-- **It never fails your turn.** A `Stop` hook that exits non-zero interrupts
-  your work; time tracking is never worth that. Every path exits 0.
-- **It never prints.** Hook output is shown to you. A tracker that talks after
-  every turn is a tracker you uninstall. Diagnostics go to
-  `~/.inlinr/claude-code-hook.log`.
+covers Claude Code in the terminal, in Claude Desktop, and inside VS Code.
 
 ## What gets sent
 
@@ -60,15 +91,19 @@ project to attribute the work to.
 
 ## Troubleshooting
 
-Nothing showing up? Run the sync by hand and read what it says:
+**Nothing shows up.** Run the sync by hand and read what it says:
 
 ```sh
 inlinr sync-ai --dry-run
 ```
 
 It reports how many beats it would send, how many transcripts it read, and how
-many sessions it skipped for having no git remote. `~/.inlinr/claude-code-hook.log`
-has the hook's own output.
+many sessions it skipped for having no git remote.
+
+**`inlinr: command not found` in the hook output.** The CLI is not on the `PATH`
+Claude Code sees. On Windows that is usually a terminal opened before the `PATH`
+change — reopen it, and check with `inlinr --version` in the same terminal you
+run `claude` from.
 
 Safe to run as often as you like: a watermark means it only reads transcript
 lines written since last time, and a lock stops two editors double-counting.
