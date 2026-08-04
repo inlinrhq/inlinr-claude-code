@@ -7,59 +7,34 @@ Works on macOS, Linux and Windows.
 
 ## Install
 
-The plugin runs the `inlinr` CLI, so install that first and make sure it is on
-your `PATH`.
-
-**macOS / Linux**
-
-```sh
-curl -fsSL https://inlinr.com/install.sh | sh
-inlinr activate
 ```
-
-**Windows (PowerShell)**
-
-```powershell
-irm https://inlinr.com/install.ps1 | iex
-inlinr activate
-```
-
-The script verifies the published SHA-256 before installing, puts the binary in
-`%LOCALAPPDATA%\Inlinr\bin`, adds that to your `PATH`, and sets it for the
-current session as well — so `inlinr activate` works straight away rather than
-after a restart nobody expects.
-
-**If you have Go, this is simpler and cannot trip an antivirus:**
-
-```
-go install github.com/inlinrhq/inlinr-cli/cmd/inlinr@latest
-```
-
-Nothing is downloaded as an executable, and the binary lands in your GOPATH bin.
-
-It also avoids the SmartScreen dialog you get downloading the `.exe` in a
-browser, and not by suppressing it: that warning comes from Mark-of-the-Web,
-and `Invoke-WebRequest` does not attach the tag that triggers it. Same binary,
-different provenance metadata. To install by hand instead, see the
-[CLI readme](https://github.com/inlinrhq/inlinr-cli#downloading-the-binary-by-hand).
-
-Finally, add the plugin:
-
-```sh
 claude plugin marketplace add inlinrhq/inlinr-claude-code
 claude plugin install inlinr@inlinr
 ```
 
-The marketplace is named `inlinr`, not `inlinr-claude-code` — the install target
-is `<plugin>@<marketplace>`, and the repository name plays no part in it.
+Then, once:
 
-> **The VS Code extension does not put the CLI on your PATH.** It downloads its
-> own copy into VS Code's private extension storage, where nothing else can find
-> it. If you use both, install the CLI separately as above.
+```
+node ~/.claude/plugins/inlinr/dist/index.js activate
+```
+
+That prints a link, you approve it in the browser, and it saves a device token.
+There is nothing else to install.
+
+**No binary, no PATH, no antivirus argument.** Claude Code is a Node program,
+so Node is on the machine by definition — the plugin reads the transcripts,
+talks to the API and stores its token itself. Asking someone to download an
+unsigned executable and then argue with Windows Defender about it, in order to
+hand an API key to a plugin, was the wrong trade.
+
+The [`inlinr` CLI](https://github.com/inlinrhq/inlinr-cli) still exists and is
+still the right thing for editors that are not Node programs. It is no longer a
+prerequisite for this one, and if you already have it activated, this plugin
+uses the same `~/.inlinr` directory.
 
 ## What it does
 
-Six hooks, all running `inlinr sync-ai`. Two kinds:
+Six hooks, all running the plugin's own `dist/index.js`. Two kinds:
 
 | Hook | Why |
 |---|---|
@@ -70,11 +45,9 @@ It used to be two hooks — `Stop` and `SessionEnd` — which meant a four-hour
 session appeared in one lump at the end, and a crash before the end appeared
 not at all.
 
-The throttle lives in the CLI rather than in the hook, because that is where
-the state already is: a sync that ran a minute ago exits before touching the
-filesystem, so a hook firing on every tool call costs a process spawn and
-nothing else. Syncing is idempotent either way — a watermark means only new
-transcript lines are read, and a lock means two editors cannot double-count.
+A sync that ran within the throttle exits before touching the filesystem, so a
+hook firing on every tool call costs a process spawn and nothing else. Syncing
+is idempotent either way: a watermark means only new transcript lines are read.
 
 All six are `async`, so nothing waits on them. That is the real guarantee that a
 tracker never costs you a turn — an exit code you have to get right is a weaker
@@ -86,10 +59,18 @@ with. Invoking the CLI directly removes the assumption: `PATH` lookup is
 something every shell does on every platform, and the "never break the turn"
 guarantee moves into the CLI where it is one line and can be tested.
 
-Everything else lives in the CLI: finding Claude Code's transcripts, counting
-tokens, computing line changes, resolving the git remote, rate-limiting, and
-queueing while offline. Keeping the parsing there means one implementation
-covers Claude Code in the terminal, in Claude Desktop, and inside VS Code.
+Reading the transcripts, counting tokens, computing line changes and resolving
+the git remote all happen here now. Two of those deserve a note because getting
+them wrong is silent:
+
+- **Token totals in the transcript are running, not incremental.** The same
+  message id is logged repeatedly while a response streams, each time with the
+  totals so far. Summing the lines multiplies a response's cost by the number
+  of chunks, so the previous contribution is superseded rather than added.
+- **Cache tokens are kept apart from input.** They bill at very different rates
+  — reads well below the input rate, writes above it — and collapsing them into
+  one figure priced at the input rate overstates a long session by close to an
+  order of magnitude, because most of a Claude Code turn is re-read context.
 
 ## What gets sent
 
