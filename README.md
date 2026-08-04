@@ -7,8 +7,12 @@ token usage, and how many lines the assistant actually wrote.
 
 ```sh
 claude plugin marketplace add inlinrhq/inlinr-claude-code
-claude plugin install inlinr@inlinr-claude-code
+claude plugin install inlinr@inlinr
 ```
+
+The marketplace is named `inlinr`, not `inlinr-claude-code` — the install
+target is `<plugin>@<marketplace>`, and the repository name plays no part in
+it.
 
 Then connect the machine once:
 

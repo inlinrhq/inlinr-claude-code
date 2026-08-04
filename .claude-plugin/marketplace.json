@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "inlinr",
+  "description": "Time tracking for developers — plugins that report to inlinr.com",
+  "owner": {
+    "name": "Inlinr",
+    "email": "hello@inlinr.com"
+  },
+  "plugins": [
+    {
+      "name": "inlinr",
+      "source": "./",
+      "description": "Track time, tokens and AI-written lines from Claude Code on inlinr.com",
+      "version": "0.1.0",
+      "homepage": "https://inlinr.com",
+      "repository": "https://github.com/inlinrhq/inlinr-claude-code",
+      "license": "BSD-3-Clause",
+      "category": "productivity",
+      "keywords": ["time tracking", "productivity", "analytics", "inlinr"],
+      "author": {
+        "name": "Inlinr"
+      }
+    }
+  ]
+}
