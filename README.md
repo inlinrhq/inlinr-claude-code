@@ -12,14 +12,19 @@ claude plugin marketplace add inlinrhq/inlinr-claude-code
 claude plugin install inlinr@inlinr
 ```
 
-Then, once:
+Then, once, inside Claude Code:
 
 ```
-node ~/.claude/plugins/inlinr/dist/index.js activate
+/inlinr:activate
 ```
 
 That prints a link, you approve it in the browser, and it saves a device token.
 There is nothing else to install.
+
+A slash command rather than a path to type, because the installed path contains
+a version number — `~/.claude/plugins/cache/inlinr/inlinr/0.4.0/` today — so any
+path in a readme is wrong the moment the plugin updates, and `~` does not expand
+in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 
 **No binary, no PATH, no antivirus argument.** Claude Code is a Node program,
 so Node is on the machine by definition — the plugin reads the transcripts,
