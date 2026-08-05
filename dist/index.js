@@ -251,7 +251,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.4.0";
+var VERSION = "0.1.0";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join2(override || join2(homedir2(), ".claude"), "projects");
@@ -302,19 +302,26 @@ function gitRemote(cwd) {
     return "";
   }
 }
+function openBrowser(url) {
+  const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
+  try {
+    execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
+  } catch {}
+}
 async function activate(config) {
   const init = await startDeviceFlow(config.apiUrl, process.platform);
   console.log("");
-  console.log("  Open this page to activate:");
-  console.log(`    ${init.verification_uri_complete}`);
-  console.log("");
   console.log(`  Code: ${init.user_code}`);
+  console.log(`  ${init.verification_uri_complete}`);
   console.log("");
-  console.log("  Waiting…");
+  console.log("  Opening that page in your browser. Approve it there.");
+  openBrowser(init.verification_uri_complete);
   const deadline = Date.now() + init.expires_in * 1000;
   const wait = Math.max(1, init.interval) * 1000;
+  let delay = 800;
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, wait));
+    await new Promise((r) => setTimeout(r, delay));
+    delay = wait;
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
       save({ ...config, deviceToken: result.token });

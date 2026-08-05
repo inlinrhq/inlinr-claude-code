@@ -22,9 +22,17 @@ That prints a link, you approve it in the browser, and it saves a device token.
 There is nothing else to install.
 
 A slash command rather than a path to type, because the installed path contains
-a version number — `~/.claude/plugins/cache/inlinr/inlinr/0.4.0/` today — so any
+a version number — `~/.claude/plugins/cache/inlinr/inlinr/<version>/` — so any
 path in a readme is wrong the moment the plugin updates, and `~` does not expand
 in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
+
+**If the plugin seems stuck on an old version**, the cache is keyed by version
+number and will not re-fetch one it already has:
+
+```
+claude plugin uninstall inlinr@inlinr
+claude plugin install inlinr@inlinr
+```
 
 **No binary, no PATH, no antivirus argument.** Claude Code is a Node program,
 so Node is on the machine by definition — the plugin reads the transcripts,
