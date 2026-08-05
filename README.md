@@ -26,6 +26,16 @@ a version number — `~/.claude/plugins/cache/inlinr/inlinr/<version>/` — so a
 path in a readme is wrong the moment the plugin updates, and `~` does not expand
 in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 
+## Disconnecting
+
+```
+/inlinr:deactivate
+```
+
+Removes the local token and revokes the device on inlinr.com, so tracking stops
+from this machine. Your history is untouched — this disconnects a machine, it
+does not delete anything. `/inlinr:activate` connects it again.
+
 **If the plugin seems stuck on an old version**, the cache is keyed by version
 number and will not re-fetch one it already has:
 

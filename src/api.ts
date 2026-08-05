@@ -17,15 +17,25 @@ export type DeviceInit = {
 	expires_in: number;
 };
 
+/**
+ * `client_name` is the machine, not the plugin.
+ *
+ * The dashboard titles each connected device with `clientName` and puts the
+ * editor underneath, so every other device reads "DESKTOP-FTIR921 / VS Code".
+ * Sending the plugin's own name here made this one read "claude-code-inlinr"
+ * with nothing to say which machine it was — which is the one thing the title
+ * is for when you have three of them.
+ */
 export async function startDeviceFlow(
 	apiUrl: string,
+	hostname: string,
 	platform: string,
 ): Promise<DeviceInit> {
 	const res = await fetch(`${apiUrl}/api/auth/device`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
-			client_name: "claude-code-inlinr",
+			client_name: hostname,
 			editor: "claude-code",
 			platform,
 		}),
@@ -170,4 +180,26 @@ export async function sendHeartbeats(
 	if (!res.ok) throw new Error(`ingest rejected the batch (HTTP ${res.status})`);
 	const body = (await res.json().catch(() => ({}))) as { accepted?: unknown };
 	return { accepted: typeof body.accepted === "number" ? body.accepted : 0 };
+}
+
+/**
+ * Revoke this machine's token, server side as well as locally.
+ *
+ * Deleting the local file alone would leave a device listed as connected
+ * forever with no way to tell it is dead — and a token that still works if
+ * anyone recovers the file.
+ */
+export async function revokeDevice(
+	apiUrl: string,
+	token: string,
+): Promise<boolean> {
+	try {
+		const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+		});
+		return res.ok;
+	} catch {
+		return false;
+	}
 }

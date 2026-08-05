@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
-import { sendHeartbeats, startDeviceFlow, pollDeviceToken, toHeartbeats } from "./api";
+import {
+	pollDeviceToken,
+	revokeDevice,
+	sendHeartbeats,
+	startDeviceFlow,
+	toHeartbeats,
+} from "./api";
 import { type Config, load, save } from "./config";
 import { isEmpty, parseTranscript } from "./transcript";
 
@@ -107,14 +113,22 @@ function openBrowser(url: string): void {
 }
 
 async function activate(config: Config): Promise<number> {
-	const init = await startDeviceFlow(config.apiUrl, process.platform);
+	const init = await startDeviceFlow(
+		config.apiUrl,
+		hostname(),
+		process.platform,
+	);
+
+	// Opened before anything is printed. The link already carries the code, so
+	// in the normal case nobody has to read the code at all — and reading it
+	// out of a scrolling tool-call log is exactly what made this feel slow.
+	openBrowser(init.verification_uri_complete);
 
 	console.log("");
-	console.log(`  Code: ${init.user_code}`);
-	console.log(`  ${init.verification_uri_complete}`);
+	console.log("  Approve this machine in the browser tab that just opened.");
+	console.log(`  If it did not open: ${init.verification_uri_complete}`);
 	console.log("");
-	console.log("  Opening that page in your browser. Approve it there.");
-	openBrowser(init.verification_uri_complete);
+	console.log(`  The code, if it asks: ${init.user_code}`);
 
 	const deadline = Date.now() + init.expires_in * 1000;
 	// The server's `interval` is a floor, not a schedule. Waiting a full five
@@ -139,6 +153,24 @@ async function activate(config: Config): Promise<number> {
 	}
 	console.error("  That code expired. Run activation again.");
 	return 1;
+}
+
+async function deactivate(config: Config): Promise<number> {
+	if (!config.deviceToken) {
+		console.log("  This machine is not connected.");
+		return 0;
+	}
+	const revoked = await revokeDevice(config.apiUrl, config.deviceToken);
+	// The local token goes either way. A failed revoke leaves a stale entry in
+	// the dashboard, which is annoying; keeping a working token on a machine
+	// somebody asked to disconnect is worse.
+	save({ ...config, deviceToken: "", lastParsedAt: null, lastSyncAt: null });
+	console.log(
+		revoked
+			? "  Disconnected. The device has been revoked on inlinr.com too."
+			: "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.",
+	);
+	return 0;
 }
 
 async function sync(config: Config, throttleSeconds: number): Promise<number> {
@@ -207,6 +239,7 @@ async function main(): Promise<number> {
 	const config = load();
 
 	if (args[0] === "activate") return activate(config);
+	if (args[0] === "deactivate") return deactivate(config);
 	if (args[0] === "--version") {
 		console.log(VERSION);
 		return 0;
