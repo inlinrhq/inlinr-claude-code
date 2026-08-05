@@ -2,7 +2,14 @@
 
 // src/index.ts
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync as mkdirSync2,
+  readdirSync,
+  readFileSync as readFileSync2,
+  existsSync,
+  statSync
+} from "node:fs";
 import { homedir as homedir2, hostname } from "node:os";
 import { join as join2 } from "node:path";
 
@@ -38,6 +45,28 @@ async function pollDeviceToken(apiUrl, deviceCode) {
     error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`
   };
 }
+var COALESCE_WINDOW_MS = 2 * 60 * 1000;
+function coalesceEdits(edits) {
+  const byBucket = new Map;
+  for (const edit of edits) {
+    const at = Date.parse(edit.timestamp);
+    if (Number.isNaN(at))
+      continue;
+    const bucket = Math.floor(at / COALESCE_WINDOW_MS);
+    const key = `${edit.path}|${bucket}`;
+    const found = byBucket.get(key);
+    if (!found) {
+      byBucket.set(key, { ...edit });
+      continue;
+    }
+    found.linesAdded += edit.linesAdded;
+    found.linesRemoved += edit.linesRemoved;
+    found.lineChanges += edit.lineChanges;
+    if (at > Date.parse(found.timestamp))
+      found.timestamp = edit.timestamp;
+  }
+  return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
 function toHeartbeats(session, gitRemote, pluginVersion) {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
   const base = {
@@ -48,7 +77,7 @@ function toHeartbeats(session, gitRemote, pluginVersion) {
     ...session.model ? { ai_model: session.model } : {},
     ...gitRemote ? { project_git_remote: gitRemote } : {}
   };
-  const beats = session.edits.map((edit) => ({
+  const beats = coalesceEdits(session.edits).map((edit) => ({
     ...base,
     entity: edit.path,
     type: "file",
@@ -78,21 +107,26 @@ function toHeartbeats(session, gitRemote, pluginVersion) {
   }
   return beats;
 }
+var MAX_BATCH = 1000;
 async function sendHeartbeats(apiUrl, token, beats) {
-  if (beats.length === 0)
-    return { accepted: 0 };
-  const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify(beats)
-  });
-  if (!res.ok)
-    throw new Error(`ingest rejected the batch (HTTP ${res.status})`);
-  const body = await res.json().catch(() => ({}));
-  return { accepted: typeof body.accepted === "number" ? body.accepted : 0 };
+  let accepted = 0;
+  for (let i = 0;i < beats.length; i += MAX_BATCH) {
+    const chunk = beats.slice(i, i + MAX_BATCH);
+    const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(chunk)
+    });
+    if (!res.ok) {
+      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted });
+    }
+    const body = await res.json().catch(() => ({}));
+    accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
+  }
+  return { accepted };
 }
 async function revokeDevice(apiUrl, token) {
   try {
@@ -335,8 +369,12 @@ async function activate(config) {
     delay = wait;
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
-      save({ ...config, deviceToken: result.token });
-      console.log("  Activated. Nothing else to set up.");
+      save({
+        ...config,
+        deviceToken: result.token,
+        lastParsedAt: new Date().toISOString()
+      });
+      console.log("  Activated. Tracking starts now.");
       return 0;
     }
     if (result.status === "denied") {
@@ -362,6 +400,11 @@ async function status(config) {
     console.log("");
     console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
     console.log("  so this is expected on a machine where you have not used it yet.");
+  }
+  const log = join2(configDir(), "claude-code.log");
+  if (existsSync(log)) {
+    console.log("");
+    console.log(`  Errors have been logged to ${log}`);
   }
   console.log("");
   return 0;
@@ -445,8 +488,17 @@ async function main() {
   const throttle = i >= 0 ? Number(args[i + 1] ?? 0) : 0;
   return sync(config, Number.isFinite(throttle) ? throttle : 0);
 }
+function logFailure(err) {
+  try {
+    const line = `${new Date().toISOString()} ${err?.message ?? String(err)}
+`;
+    mkdirSync2(configDir(), { recursive: true });
+    appendFileSync(join2(configDir(), "claude-code.log"), line, "utf8");
+  } catch {}
+}
 main().then((code) => process.exit(code)).catch((err) => {
-  if (process.argv[2] === "activate") {
+  logFailure(err);
+  if (process.argv[2] === "activate" || process.argv[2] === "deactivate") {
     console.error(`  ${err.message}`);
     process.exit(1);
   }

@@ -21,6 +21,11 @@ Then, once, inside Claude Code:
 That prints a link, you approve it in the browser, and it saves a device token.
 There is nothing else to install.
 
+**Tracking starts when you activate, not before.** Claude Code keeps every
+transcript it has ever written, so a first sync could otherwise upload months
+of past work — attributed to projects you may never have wanted tracked — the
+moment you connect a plugin. Nobody asks for that by activating something.
+
 A slash command rather than a path to type, because the installed path contains
 a version number — `~/.claude/plugins/cache/inlinr/inlinr/<version>/` — so any
 path in a readme is wrong the moment the plugin updates, and `~` does not expand
