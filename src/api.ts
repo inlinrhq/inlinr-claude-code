@@ -76,6 +76,51 @@ export async function pollDeviceToken(
 	};
 }
 
+/**
+ * Edits to the same file inside one window become one beat.
+ *
+ * A heartbeat is a periodic pulse, not an event log. An assistant can make
+ * twenty edits to one file in a minute, and twenty rows for that is storage
+ * and query cost for no extra information: duration is computed from the gaps
+ * between beats, and gaps of one second sum to the same time as one beat does.
+ *
+ * The window has to stay well under the keystroke timeout — the smallest is
+ * five minutes — or coalescing would start dropping real time on the floor.
+ * Two minutes is the interval editors emit at anyway, so it also makes these
+ * beats look like every other plugin's.
+ *
+ * Line counts are summed rather than taken from one edit, so nothing is lost.
+ */
+export const COALESCE_WINDOW_MS = 2 * 60 * 1000;
+
+export function coalesceEdits(
+	edits: Session["edits"],
+): Session["edits"] {
+	const byBucket = new Map<string, Session["edits"][number]>();
+
+	for (const edit of edits) {
+		const at = Date.parse(edit.timestamp);
+		if (Number.isNaN(at)) continue;
+		const bucket = Math.floor(at / COALESCE_WINDOW_MS);
+		const key = `${edit.path}|${bucket}`;
+		const found = byBucket.get(key);
+		if (!found) {
+			byBucket.set(key, { ...edit });
+			continue;
+		}
+		found.linesAdded += edit.linesAdded;
+		found.linesRemoved += edit.linesRemoved;
+		found.lineChanges += edit.lineChanges;
+		// The latest moment in the bucket, so the beat sits at the end of the
+		// stretch of work it represents rather than at its start.
+		if (at > Date.parse(found.timestamp)) found.timestamp = edit.timestamp;
+	}
+
+	return [...byBucket.values()].sort(
+		(a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp),
+	);
+}
+
 /** The wire shape, snake_case, matching what the CLI and editors send. */
 export type Heartbeat = {
 	entity: string;
@@ -129,7 +174,7 @@ export function toHeartbeats(
 		...(gitRemote ? { project_git_remote: gitRemote } : {}),
 	};
 
-	const beats: Heartbeat[] = session.edits.map((edit) => ({
+	const beats: Heartbeat[] = coalesceEdits(session.edits).map((edit) => ({
 		...base,
 		entity: edit.path,
 		type: "file",
@@ -163,23 +208,37 @@ export function toHeartbeats(
 	return beats;
 }
 
+/** The server's own limit. Sending more is a 400, not a slow request. */
+export const MAX_BATCH = 1000;
+
 export async function sendHeartbeats(
 	apiUrl: string,
 	token: string,
 	beats: Heartbeat[],
 ): Promise<{ accepted: number }> {
-	if (beats.length === 0) return { accepted: 0 };
-	const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			authorization: `Bearer ${token}`,
-		},
-		body: JSON.stringify(beats),
-	});
-	if (!res.ok) throw new Error(`ingest rejected the batch (HTTP ${res.status})`);
-	const body = (await res.json().catch(() => ({}))) as { accepted?: unknown };
-	return { accepted: typeof body.accepted === "number" ? body.accepted : 0 };
+	let accepted = 0;
+	for (let i = 0; i < beats.length; i += MAX_BATCH) {
+		const chunk = beats.slice(i, i + MAX_BATCH);
+		const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${token}`,
+			},
+			body: JSON.stringify(chunk),
+		});
+		if (!res.ok) {
+			// Throw with what got through, so the caller can advance a watermark
+			// over the part that landed instead of replaying or losing it.
+			throw Object.assign(
+				new Error(`ingest rejected a batch (HTTP ${res.status})`),
+				{ accepted },
+			);
+		}
+		const body = (await res.json().catch(() => ({}))) as { accepted?: unknown };
+		accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
+	}
+	return { accepted };
 }
 
 /**

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+	appendFileSync,
+	type Dirent,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	existsSync,
+	statSync,
+} from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +18,7 @@ import {
 	startDeviceFlow,
 	toHeartbeats,
 } from "./api";
-import { type Config, load, save } from "./config";
+import { type Config, configDir, load, save } from "./config";
 import { isEmpty, parseTranscript } from "./transcript";
 
 /**
@@ -142,8 +150,20 @@ async function activate(config: Config): Promise<number> {
 		delay = wait;
 		const result = await pollDeviceToken(config.apiUrl, init.device_code);
 		if (result.status === "ok") {
-			save({ ...config, deviceToken: result.token });
-			console.log("  Activated. Nothing else to set up.");
+			// The clock starts now.
+			//
+			// Claude Code keeps every transcript it has ever written — a month of
+			// them on the machine this was found on, 8000 edits. Uploading all of
+			// that the moment somebody connects a plugin is not something they
+			// asked for: it is months of past work, attributed to projects they
+			// may not have wanted tracked, in one enormous request. A tracker
+			// starts tracking when you turn it on.
+			save({
+				...config,
+				deviceToken: result.token,
+				lastParsedAt: new Date().toISOString(),
+			});
+			console.log("  Activated. Tracking starts now.");
 			return 0;
 		}
 		if (result.status === "denied") {
@@ -189,6 +209,11 @@ async function status(config: Config): Promise<number> {
 		console.log(
 			"  so this is expected on a machine where you have not used it yet.",
 		);
+	}
+	const log = join(configDir(), "claude-code.log");
+	if (existsSync(log)) {
+		console.log("");
+		console.log(`  Errors have been logged to ${log}`);
 	}
 	console.log("");
 	return 0;
@@ -293,10 +318,30 @@ async function main(): Promise<number> {
 // A tracker must never break the turn it is measuring. Every path returns 0
 // unless it is the interactive activation command, where an exit code is the
 // only way to report failure.
+/**
+ * Never break the turn — but never disappear either.
+ *
+ * Swallowing errors is right: a tracker must not fail the thing it measures.
+ * Swallowing them *silently* is how a sync that had been failing on every hook
+ * looked exactly like a sync that had never run. Failures go to a log with a
+ * timestamp; `status` points at it.
+ */
+function logFailure(err: unknown): void {
+	try {
+		const line = `${new Date().toISOString()} ${(err as Error)?.message ?? String(err)}
+`;
+		mkdirSync(configDir(), { recursive: true });
+		appendFileSync(join(configDir(), "claude-code.log"), line, "utf8");
+	} catch {
+		// Even the log is best effort.
+	}
+}
+
 main()
 	.then((code) => process.exit(code))
 	.catch((err) => {
-		if (process.argv[2] === "activate") {
+		logFailure(err);
+		if (process.argv[2] === "activate" || process.argv[2] === "deactivate") {
 			console.error(`  ${(err as Error).message}`);
 			process.exit(1);
 		}
