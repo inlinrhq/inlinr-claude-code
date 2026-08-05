@@ -20,7 +20,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.4.0";
+const VERSION = "0.1.0";
 
 function claudeProjectsDir(): string {
 	const override = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -84,22 +84,48 @@ function gitRemote(cwd: string): string {
 	}
 }
 
+/**
+ * Open a URL in the user's browser.
+ *
+ * Best effort: if it fails the link is already printed, so nothing is lost —
+ * and a headless machine or an SSH session is a normal place to run this.
+ */
+function openBrowser(url: string): void {
+	const [cmd, args] =
+		process.platform === "win32"
+			? // `start` is a cmd builtin, not a program, and its first quoted
+				// argument is taken as the window title — hence the empty one.
+				["cmd", ["/c", "start", "", url]]
+			: process.platform === "darwin"
+				? ["open", [url]]
+				: ["xdg-open", [url]];
+	try {
+		execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
+	} catch {
+		// Printed above; the user can click it.
+	}
+}
+
 async function activate(config: Config): Promise<number> {
 	const init = await startDeviceFlow(config.apiUrl, process.platform);
 
 	console.log("");
-	console.log("  Open this page to activate:");
-	console.log(`    ${init.verification_uri_complete}`);
-	console.log("");
 	console.log(`  Code: ${init.user_code}`);
+	console.log(`  ${init.verification_uri_complete}`);
 	console.log("");
-	console.log("  Waiting…");
+	console.log("  Opening that page in your browser. Approve it there.");
+	openBrowser(init.verification_uri_complete);
 
 	const deadline = Date.now() + init.expires_in * 1000;
+	// The server's `interval` is a floor, not a schedule. Waiting a full five
+	// seconds before even the first check makes an approval that already
+	// happened feel like a hang; a short first poll costs one request.
 	const wait = Math.max(1, init.interval) * 1000;
+	let delay = 800;
 
 	while (Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, wait));
+		await new Promise((r) => setTimeout(r, delay));
+		delay = wait;
 		const result = await pollDeviceToken(config.apiUrl, init.device_code);
 		if (result.status === "ok") {
 			save({ ...config, deviceToken: result.token });
