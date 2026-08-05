@@ -26,6 +26,32 @@ a version number — `~/.claude/plugins/cache/inlinr/inlinr/<version>/` — so a
 path in a readme is wrong the moment the plugin updates, and `~` does not expand
 in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/inlinr:activate` | Connect this machine. Opens a page, you approve it there. |
+| `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
+| `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
+
+There is deliberately no command to list your languages, sessions or files. The
+dashboard shows all of that with a period picker and drill-down, and a table of
+languages printed into a terminal is a thing people run once. `status` exists
+because "is this actually working" is a question you have *here*, in the
+session, and cannot answer from the dashboard — an empty dashboard looks the
+same whether nothing was tracked or nothing was sent.
+
+## Updating
+
+```
+claude plugin update inlinr@inlinr
+```
+
+The plugin cache is keyed by version and will not re-fetch one it already has,
+so if that changes nothing, uninstall and install again. `/inlinr:status`
+prints the running version, which is the fastest way to tell whether an update
+actually took.
+
 ## Disconnecting
 
 ```
@@ -36,13 +62,7 @@ Removes the local token and revokes the device on inlinr.com, so tracking stops
 from this machine. Your history is untouched — this disconnects a machine, it
 does not delete anything. `/inlinr:activate` connects it again.
 
-**If the plugin seems stuck on an old version**, the cache is keyed by version
-number and will not re-fetch one it already has:
-
-```
-claude plugin uninstall inlinr@inlinr
-claude plugin install inlinr@inlinr
-```
+**If the plugin seems stuck on an old version**, see [Updating](#updating).
 
 **No binary, no PATH, no antivirus argument.** Claude Code is a Node program,
 so Node is on the machine by definition — the plugin reads the transcripts,

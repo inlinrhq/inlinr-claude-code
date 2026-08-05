@@ -347,6 +347,25 @@ async function activate(config) {
   console.error("  That code expired. Run activation again.");
   return 1;
 }
+async function status(config) {
+  const paths = transcriptPaths(null);
+  const since = config.lastParsedAt ? new Date(config.lastParsedAt) : null;
+  const pending = transcriptPaths(since).length;
+  console.log("");
+  console.log(`  Plugin      ${VERSION}`);
+  console.log(`  Machine     ${hostname()}`);
+  console.log(`  Account     ${config.deviceToken ? "connected" : "not connected — run /inlinr:activate"}`);
+  console.log(`  Server      ${config.apiUrl}`);
+  console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
+  console.log(`  Transcripts ${paths.length} found, ${pending} with something new`);
+  if (config.deviceToken && paths.length === 0) {
+    console.log("");
+    console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
+    console.log("  so this is expected on a machine where you have not used it yet.");
+  }
+  console.log("");
+  return 0;
+}
 async function deactivate(config) {
   if (!config.deviceToken) {
     console.log("  This machine is not connected.");
@@ -416,6 +435,8 @@ async function main() {
     return activate(config);
   if (args[0] === "deactivate")
     return deactivate(config);
+  if (args[0] === "status")
+    return status(config);
   if (args[0] === "--version") {
     console.log(VERSION);
     return 0;

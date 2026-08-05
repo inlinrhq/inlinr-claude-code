@@ -155,6 +155,45 @@ async function activate(config: Config): Promise<number> {
 	return 1;
 }
 
+/**
+ * Is this actually working?
+ *
+ * The question a plugin user has, and the one that took an hour to answer by
+ * hand when a stale cache left an old build running against a newer
+ * marketplace. Every line here is something that was guessed at during that:
+ * which build is running, whether there is a token, when a sync last happened,
+ * and how many transcripts are in scope.
+ */
+async function status(config: Config): Promise<number> {
+	const paths = transcriptPaths(null);
+	const since = config.lastParsedAt ? new Date(config.lastParsedAt) : null;
+	const pending = transcriptPaths(since).length;
+
+	console.log("");
+	console.log(`  Plugin      ${VERSION}`);
+	console.log(`  Machine     ${hostname()}`);
+	console.log(`  Account     ${config.deviceToken ? "connected" : "not connected — run /inlinr:activate"}`);
+	console.log(`  Server      ${config.apiUrl}`);
+	console.log(
+		`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`,
+	);
+	console.log(
+		`  Transcripts ${paths.length} found, ${pending} with something new`,
+	);
+
+	if (config.deviceToken && paths.length === 0) {
+		console.log("");
+		console.log(
+			"  No transcripts found. Claude Code writes them under ~/.claude/projects,",
+		);
+		console.log(
+			"  so this is expected on a machine where you have not used it yet.",
+		);
+	}
+	console.log("");
+	return 0;
+}
+
 async function deactivate(config: Config): Promise<number> {
 	if (!config.deviceToken) {
 		console.log("  This machine is not connected.");
@@ -240,6 +279,7 @@ async function main(): Promise<number> {
 
 	if (args[0] === "activate") return activate(config);
 	if (args[0] === "deactivate") return deactivate(config);
+	if (args[0] === "status") return status(config);
 	if (args[0] === "--version") {
 		console.log(VERSION);
 		return 0;
