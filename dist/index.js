@@ -3,16 +3,16 @@
 // src/index.ts
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir2, hostname } from "node:os";
 import { join as join2 } from "node:path";
 
 // src/api.ts
-async function startDeviceFlow(apiUrl, platform) {
+async function startDeviceFlow(apiUrl, hostname, platform) {
   const res = await fetch(`${apiUrl}/api/auth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      client_name: "claude-code-inlinr",
+      client_name: hostname,
       editor: "claude-code",
       platform
     })
@@ -93,6 +93,17 @@ async function sendHeartbeats(apiUrl, token, beats) {
     throw new Error(`ingest rejected the batch (HTTP ${res.status})`);
   const body = await res.json().catch(() => ({}));
   return { accepted: typeof body.accepted === "number" ? body.accepted : 0 };
+}
+async function revokeDevice(apiUrl, token) {
+  try {
+    const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // src/config.ts
@@ -309,13 +320,13 @@ function openBrowser(url) {
   } catch {}
 }
 async function activate(config) {
-  const init = await startDeviceFlow(config.apiUrl, process.platform);
-  console.log("");
-  console.log(`  Code: ${init.user_code}`);
-  console.log(`  ${init.verification_uri_complete}`);
-  console.log("");
-  console.log("  Opening that page in your browser. Approve it there.");
+  const init = await startDeviceFlow(config.apiUrl, hostname(), process.platform);
   openBrowser(init.verification_uri_complete);
+  console.log("");
+  console.log("  Approve this machine in the browser tab that just opened.");
+  console.log(`  If it did not open: ${init.verification_uri_complete}`);
+  console.log("");
+  console.log(`  The code, if it asks: ${init.user_code}`);
   const deadline = Date.now() + init.expires_in * 1000;
   const wait = Math.max(1, init.interval) * 1000;
   let delay = 800;
@@ -335,6 +346,16 @@ async function activate(config) {
   }
   console.error("  That code expired. Run activation again.");
   return 1;
+}
+async function deactivate(config) {
+  if (!config.deviceToken) {
+    console.log("  This machine is not connected.");
+    return 0;
+  }
+  const revoked = await revokeDevice(config.apiUrl, config.deviceToken);
+  save({ ...config, deviceToken: "", lastParsedAt: null, lastSyncAt: null });
+  console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
+  return 0;
 }
 async function sync(config, throttleSeconds) {
   if (!config.deviceToken) {
@@ -393,6 +414,8 @@ async function main() {
   const config = load();
   if (args[0] === "activate")
     return activate(config);
+  if (args[0] === "deactivate")
+    return deactivate(config);
   if (args[0] === "--version") {
     console.log(VERSION);
     return 0;
