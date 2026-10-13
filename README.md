@@ -9,8 +9,12 @@ Works on macOS, Linux and Windows.
 
 ```
 claude plugin marketplace add inlinrhq/inlinr-claude-code
-claude plugin install inlinr@inlinr
+claude plugin install inlinr@inlinr --scope user
 ```
+
+`--scope user` installs it for every project on the machine. Installed for one
+project only, the plugin runs in that project's sessions and nowhere else —
+which looks exactly like an activation that only covers one session.
 
 Then, once, inside Claude Code:
 
@@ -18,8 +22,9 @@ Then, once, inside Claude Code:
 /inlinr:activate
 ```
 
-That prints a link, you approve it in the browser, and it saves a device token.
-There is nothing else to install.
+That prints a link, you approve it in the browser, and it saves a device token
+in `~/.inlinr`. That covers the machine: every session, every project, the
+terminal and the desktop app alike. There is nothing else to install.
 
 **Tracking starts when you activate, not before.** Claude Code keeps every
 transcript it has ever written, so a first sync could otherwise upload months
@@ -38,6 +43,7 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 | `/inlinr:activate` | Connect this machine. Opens a page, you approve it there. |
 | `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
 | `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
+| `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
 
 There is deliberately no command to list your languages, sessions or files. The
 dashboard shows all of that with a period picker and drill-down, and a table of
@@ -45,6 +51,29 @@ languages printed into a terminal is a thing people run once. `status` exists
 because "is this actually working" is a question you have *here*, in the
 session, and cannot answer from the dashboard — an empty dashboard looks the
 same whether nothing was tracked or nothing was sent.
+
+## Cloud sessions
+
+Claude Code on the web runs each session in a fresh container, and it does not
+install plugins — not yours, not even the ones a repository enables. Two things
+do carry over: the environment's variables, and the hooks in a repository's
+own `.claude/settings.json`. So cloud tracking is the same script, run by a hook
+committed to the repository, with a token from the environment:
+
+1. Run `/inlinr:cloud` on your machine and approve it. It prints a token and a
+   hooks block.
+2. In the cloud environment's settings, add `INLINR_TOKEN=<token>`, set network
+   access to Custom with `inlinr.com` added (keep the default package managers),
+   and save.
+3. Merge the hooks block into `.claude/settings.json` in each repository you
+   work on in the cloud, and commit it.
+
+The hooks do nothing outside the cloud (`CLAUDE_CODE_REMOTE` is only set
+there), so they never double-count with the plugin on your machine. Claude Code
+reads a repository's hooks only in single-repository cloud sessions.
+
+`INLINR_TOKEN` works on any machine, not only in the cloud: a token from the
+environment is used whenever none has been saved by `/inlinr:activate`.
 
 ## Updating
 
@@ -82,39 +111,54 @@ uses the same `~/.inlinr` directory.
 
 ## What it does
 
-Six hooks, all running the plugin's own `dist/index.js`. Two kinds:
+Seven hooks, all running the plugin's own `dist/index.js`. Two kinds:
 
 | Hook | Why |
 |---|---|
 | `UserPromptSubmit`, `PostToolUse`, `SubagentStop` | Throttled to one sync every two minutes. These make a long session show up *while* it happens rather than only at the end. |
-| `Stop`, `SessionEnd`, `PreCompact` | Unthrottled. These are the moments that mean "this is over" — a session that ends abruptly must not leave its last stretch unsynced. |
-
-It used to be two hooks — `Stop` and `SessionEnd` — which meant a four-hour
-session appeared in one lump at the end, and a crash before the end appeared
-not at all.
+| `SessionStart`, `Stop`, `SessionEnd`, `PreCompact` | Unthrottled. The start sets the clock on a machine that has a token but has never synced; the others are the moments that mean "this is over". |
 
 A sync that ran within the throttle exits before touching the filesystem, so a
-hook firing on every tool call costs a process spawn and nothing else. Syncing
-is idempotent either way: a watermark means only new transcript lines are read.
+hook firing on every tool call costs a process spawn and nothing else. Each
+transcript is read from where the last sync stopped, so nothing is read or sent
+twice, and positions are saved only once the server has the beats.
 
-All six are `async`, so nothing waits on them. That is the real guarantee that a
-tracker never costs you a turn — an exit code you have to get right is a weaker
-one. `inlinr sync-ai` also never exits non-zero, as a second line of defence.
+All seven are `async`, so nothing waits on them. That is the real guarantee that
+a tracker never costs you a turn. The script also never exits non-zero from a
+hook, as a second line of defence; failures go to `~/.inlinr/claude-code.log`,
+and `/inlinr:status` points at it.
 
-That is the entire plugin — there is no wrapper script. It used to ship a POSIX
-`sh` file, which assumed every platform gives Claude Code an `sh` to run it
-with. Invoking the CLI directly removes the assumption: `PATH` lookup is
-something every shell does on every platform, and the "never break the turn"
-guarantee moves into the CLI where it is one line and can be tested.
+### How time is counted
 
-Reading the transcripts, counting tokens, computing line changes and resolving
-the git remote all happen here now. Two of those deserve a note because getting
-them wrong is silent:
+Time is the gaps between beats, as everywhere on Inlinr: a gap under your
+keystroke timeout counts, a longer one means you walked away. So what matters
+is that a beat exists for every stretch of real work:
+
+- **One activity beat per minute** in which the session did anything — a
+  prompt, a response, a tool result — at the moment the transcript says it
+  happened. Reading code, running tests and waiting on a long answer are work
+  too. When only file edits produced beats, twenty minutes of investigation
+  before a one-line fix came out as nothing.
+- **One file beat per file per two minutes** the assistant edited, carrying how
+  many lines it added and removed.
+- **Subagents count.** Their transcripts sit in their own files, and those are
+  read too.
+
+### Which project
+
+Where the work happened, not where the session started. An edit belongs to the
+repository its file is in; activity belongs to the repository of the directory
+the session stood in at that moment. A session started in a folder that holds
+several repositories gives its activity to the one it was editing nearest in
+time. The branch is the one checked out when the sync runs.
+
+### Two things that are easy to get wrong
 
 - **Token totals in the transcript are running, not incremental.** The same
   message id is logged repeatedly while a response streams, each time with the
   totals so far. Summing the lines multiplies a response's cost by the number
-  of chunks, so the previous contribution is superseded rather than added.
+  of chunks, so the previous contribution is superseded rather than added —
+  including across two syncs that land mid-stream.
 - **Cache tokens are kept apart from input.** They bill at very different rates
   — reads well below the input rate, writes above it — and collapsing them into
   one figure priced at the input rate overstates a long session by close to an
@@ -132,28 +176,20 @@ writes on your machine:
 | Input / output / cache token counts | Your prompts |
 | Model name, session id | Assistant responses |
 | Repository remote and branch | Anything from a folder with no git remote |
+| When the session was active, to the minute | |
 
-Sessions started outside a git repository are skipped entirely — there is no
-project to attribute the work to.
+Work that cannot be tied to any git repository is skipped — there is no
+project to attribute it to.
 
 ## Troubleshooting
 
-**Nothing shows up.** Run the sync by hand and read what it says:
+**Nothing shows up.** Run `/inlinr:status`. It says whether this machine is
+connected, when it last synced, how many transcripts have something new, and
+whether errors have been logged.
 
-```sh
-inlinr sync-ai --dry-run
-```
-
-It reports how many beats it would send, how many transcripts it read, and how
-many sessions it skipped for having no git remote.
-
-**`inlinr: command not found` in the hook output.** The CLI is not on the `PATH`
-Claude Code sees. On Windows that is usually a terminal opened before the `PATH`
-change — reopen it, and check with `inlinr --version` in the same terminal you
-run `claude` from.
-
-Safe to run as often as you like: a watermark means it only reads transcript
-lines written since last time, and a lock stops two editors double-counting.
+**Cloud sessions do not show up.** Check that the environment has
+`INLINR_TOKEN`, that `inlinr.com` is in its network allowlist, and that the
+session has a single repository whose `.claude/settings.json` has the hooks.
 
 ## License
 

@@ -65,9 +65,9 @@ describe("parseTranscript", () => {
 		});
 	});
 
-	test("ignores subagent lines", () => {
-		// Their work is already in the parent's own file; counting it again
-		// doubles both tokens and edits.
+	test("ignores sidechain lines in a main transcript", () => {
+		// An older Claude Code logged a subagent's work in the parent's file;
+		// current ones write it to the subagent's own file, read separately.
 		const content = [
 			usageLine("m1", "2026-08-01T10:00:00Z", { output_tokens: 10 }),
 			usageLine("m2", "2026-08-01T10:00:05Z", { output_tokens: 999 }, {
@@ -75,6 +75,50 @@ describe("parseTranscript", () => {
 			}),
 		].join("\n");
 		expect(parseTranscript(content)?.tokens.output).toBe(10);
+	});
+
+	test("reads every line of a subagent's own file", () => {
+		// Every line there is flagged as a sidechain and exists nowhere else.
+		// Skipping them lost the subagent's time, tokens and edits.
+		const content = [
+			usageLine("m1", "2026-08-01T10:00:00Z", { output_tokens: 10 }, { isSidechain: true }),
+			usageLine("m2", "2026-08-01T10:00:05Z", { output_tokens: 7 }, { isSidechain: true }),
+		].join("\n");
+		const s = parseTranscript(content, { subagent: true });
+		expect(s?.tokens.output).toBe(17);
+		expect(s?.activity).toHaveLength(2);
+	});
+
+	test("records activity for prompts and tool results, not bookkeeping", () => {
+		const content = [
+			line({ timestamp: "2026-08-01T10:00:00Z", sessionId: "s1", cwd: "/repo", gitBranch: "main", type: "user", message: { role: "user", content: "hi" } }),
+			line({ timestamp: "2026-08-01T10:00:01Z", sessionId: "s1", type: "queue-operation" }),
+			line({ timestamp: "2026-08-01T10:00:02Z", sessionId: "s1", type: "attachment", attachment: {} }),
+			line({ timestamp: "2026-08-01T10:04:00Z", sessionId: "s1", cwd: "/repo/sub", type: "user", toolUseResult: { stdout: "ok" } }),
+		].join("\n");
+		const s = parseTranscript(content);
+		expect(s?.activity).toEqual([
+			{ at: "2026-08-01T10:00:00.000Z", cwd: "/repo" },
+			{ at: "2026-08-01T10:04:00.000Z", cwd: "/repo/sub" },
+		]);
+	});
+
+	test("does not add a message twice when a sync lands mid-stream", () => {
+		// The first read saw m1 at 25 tokens; the second sees it finish at 40.
+		// Only the difference is new.
+		const first = parseTranscript(
+			usageLine("m1", "2026-08-01T10:00:00Z", { output_tokens: 25 }),
+		);
+		const second = parseTranscript(
+			[
+				usageLine("m1", "2026-08-01T10:00:01Z", { output_tokens: 40 }),
+				usageLine("m2", "2026-08-01T10:00:02Z", { output_tokens: 5 }),
+			].join("\n"),
+			{ carry: first?.carry },
+		);
+		expect(first?.tokens.output).toBe(25);
+		expect(second?.tokens.output).toBe(20);
+		expect(second?.carry).toMatchObject({ id: "m2", output: 5 });
 	});
 
 	test("collects file edits with their line deltas", () => {
@@ -97,6 +141,7 @@ describe("parseTranscript", () => {
 			linesAdded: 13,
 			linesRemoved: 5,
 			lineChanges: 8,
+			cwd: "/repo",
 		});
 	});
 
@@ -118,7 +163,7 @@ describe("parseTranscript", () => {
 			usageLine("m1", "2026-08-01T10:00:00Z", { output_tokens: 10 }),
 			usageLine("m2", "2026-08-01T11:00:00Z", { output_tokens: 20 }),
 		].join("\n");
-		const s = parseTranscript(content, new Date("2026-08-01T10:30:00Z"));
+		const s = parseTranscript(content, { since: new Date("2026-08-01T10:30:00Z") });
 		expect(s?.tokens.output).toBe(20);
 		// The session identity still comes through, because it is read before
 		// the watermark check — otherwise a resumed session would look new.
@@ -171,7 +216,7 @@ describe("isEmpty", () => {
 	test("is true when the watermark left nothing", () => {
 		const s = parseTranscript(
 			usageLine("m1", "2026-08-01T10:00:00Z", { output_tokens: 10 }),
-			new Date("2026-08-02T00:00:00Z"),
+			{ since: new Date("2026-08-02T00:00:00Z") },
 		);
 		expect(s && isEmpty(s)).toBe(true);
 	});

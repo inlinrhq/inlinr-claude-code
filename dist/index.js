@@ -4,16 +4,19 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
-  mkdirSync as mkdirSync2,
-  readdirSync,
-  readFileSync as readFileSync2,
+  closeSync,
   existsSync,
+  mkdirSync as mkdirSync2,
+  openSync,
+  readdirSync,
+  readSync,
   statSync
 } from "node:fs";
 import { homedir as homedir2, hostname } from "node:os";
-import { join as join2 } from "node:path";
+import { dirname as dirname2, join as join2 } from "node:path";
 
 // src/api.ts
+import { dirname } from "node:path";
 async function startDeviceFlow(apiUrl, hostname, platform) {
   const res = await fetch(`${apiUrl}/api/auth/device`, {
     method: "POST",
@@ -67,22 +70,28 @@ function coalesceEdits(edits) {
   }
   return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 }
-function toHeartbeats(session, gitRemote, pluginVersion) {
+var ACTIVITY_WINDOW_MS = 60 * 1000;
+function toHeartbeats(session, resolve, pluginVersion) {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
   const base = {
     editor: "claude-code",
     plugin,
     ai_tool: "claude-code",
     ai_session: session.id,
-    ...session.model ? { ai_model: session.model } : {},
-    ...gitRemote ? { project_git_remote: gitRemote } : {}
+    ...session.model ? { ai_model: session.model } : {}
   };
-  const beats = coalesceEdits(session.edits).map((edit) => ({
+  const edits = coalesceEdits(session.edits).flatMap((edit) => {
+    const repo = resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    return repo ? [{ edit, repo }] : [];
+  });
+  const beats = edits.map(({ edit, repo }) => ({
     ...base,
     entity: edit.path,
     type: "file",
     time: Date.parse(edit.timestamp) / 1000,
     category: "coding",
+    project_git_remote: repo.remote,
+    ...repo.branch ? { branch: repo.branch } : {},
     is_write: true,
     lines_added: edit.linesAdded,
     lines_deleted: edit.linesRemoved,
@@ -90,22 +99,52 @@ function toHeartbeats(session, gitRemote, pluginVersion) {
     ai_lines_deleted: edit.linesRemoved,
     ai_line_changes: edit.lineChanges
   }));
-  const t = session.tokens;
-  const anyTokens = t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
-  if (anyTokens && session.lastSeen) {
-    beats.push({
+  const nearestEdit = (at) => {
+    let best = null;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const { edit, repo } of edits) {
+      const gap = Math.abs(Date.parse(edit.timestamp) - at);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = repo;
+      }
+    }
+    return best;
+  };
+  const windows = new Map;
+  for (const a of session.activity) {
+    const at = Date.parse(a.at);
+    if (Number.isNaN(at))
+      continue;
+    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    if (!repo)
+      continue;
+    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+    const found = windows.get(key);
+    if (found && found.time * 1000 >= at)
+      continue;
+    windows.set(key, {
       ...base,
       entity: "claude-code",
       type: "app",
-      time: Date.parse(session.lastSeen) / 1000,
+      time: at / 1000,
       category: "ai",
-      ai_input_tokens: t.input,
-      ai_output_tokens: t.output,
-      ai_cache_read_tokens: t.cacheRead,
-      ai_cache_write_tokens: t.cacheWrite
+      project_git_remote: repo.remote,
+      ...repo.branch ? { branch: repo.branch } : {}
     });
   }
-  return beats;
+  const activity = [...windows.values()].sort((a, b) => a.time - b.time);
+  beats.push(...activity);
+  const t = session.tokens;
+  const anyTokens = t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
+  const last = activity.at(-1);
+  if (anyTokens && last) {
+    last.ai_input_tokens = t.input;
+    last.ai_output_tokens = t.output;
+    last.ai_cache_read_tokens = t.cacheRead;
+    last.ai_cache_write_tokens = t.cacheWrite;
+  }
+  return beats.sort((a, b) => a.time - b.time);
 }
 var MAX_BATCH = 1000;
 async function sendHeartbeats(apiUrl, token, beats) {
@@ -159,16 +198,21 @@ function load() {
       deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
       apiUrl: typeof raw.apiUrl === "string" && raw.apiUrl ? raw.apiUrl : DEFAULT_API,
       lastParsedAt: typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
-      lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null
+      lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
+      files: raw.files && typeof raw.files === "object" ? raw.files : {}
     };
   } catch {
     return {
       deviceToken: "",
       apiUrl: process.env.INLINR_API_URL?.trim() || DEFAULT_API,
       lastParsedAt: null,
-      lastSyncAt: null
+      lastSyncAt: null,
+      files: {}
     };
   }
+}
+function token(config) {
+  return config.deviceToken || process.env.INLINR_TOKEN?.trim() || "";
 }
 function save(config) {
   const dir = configDir();
@@ -191,16 +235,20 @@ var emptyTokens = () => ({
   output: 0
 });
 var n = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
-function parseTranscript(content, since = null) {
-  const sinceMs = since ? since.getTime() : null;
+function parseTranscript(content, options = {}) {
+  const sinceMs = options.since ? options.since.getTime() : null;
   let id = "";
   let cwd = "";
   let model = "";
   const tokens = emptyTokens();
   const edits = [];
+  const activity = [];
   let firstSeen = null;
   let lastSeen = null;
+  let carry = options.carry ?? null;
   const seen = new Map;
+  if (carry)
+    seen.set(carry.id, carry);
   for (const raw of content.split(`
 `)) {
     const line = raw.trim();
@@ -212,7 +260,7 @@ function parseTranscript(content, since = null) {
     } catch {
       continue;
     }
-    if (entry.isSidechain === true)
+    if (entry.isSidechain === true && !options.subagent)
       continue;
     const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
     if (Number.isNaN(ts))
@@ -223,11 +271,16 @@ function parseTranscript(content, since = null) {
       cwd = entry.cwd;
     if (sinceMs !== null && ts <= sinceMs)
       continue;
+    const message = entry.message;
+    const result = entry.toolUseResult;
+    if (!message && !result)
+      continue;
     if (firstSeen === null || ts < firstSeen)
       firstSeen = ts;
     if (lastSeen === null || ts > lastSeen)
       lastSeen = ts;
-    const message = entry.message;
+    const at = new Date(ts).toISOString();
+    activity.push({ at, cwd });
     if (message && typeof message.model === "string" && message.model) {
       model = message.model;
     }
@@ -240,28 +293,15 @@ function parseTranscript(content, since = null) {
         output: n(usage.output_tokens)
       };
       const key = typeof message?.id === "string" && message.id ? message.id : "";
-      if (key) {
-        const before = seen.get(key);
-        if (before) {
-          tokens.input += next.input - before.input;
-          tokens.cacheRead += next.cacheRead - before.cacheRead;
-          tokens.cacheWrite += next.cacheWrite - before.cacheWrite;
-          tokens.output += next.output - before.output;
-        } else {
-          tokens.input += next.input;
-          tokens.cacheRead += next.cacheRead;
-          tokens.cacheWrite += next.cacheWrite;
-          tokens.output += next.output;
-        }
+      const before = key && seen.get(key) || emptyTokens();
+      tokens.input += next.input - before.input;
+      tokens.cacheRead += next.cacheRead - before.cacheRead;
+      tokens.cacheWrite += next.cacheWrite - before.cacheWrite;
+      tokens.output += next.output - before.output;
+      if (key)
         seen.set(key, next);
-      } else {
-        tokens.input += next.input;
-        tokens.cacheRead += next.cacheRead;
-        tokens.cacheWrite += next.cacheWrite;
-        tokens.output += next.output;
-      }
+      carry = key ? { id: key, ...next } : null;
     }
-    const result = entry.toolUseResult;
     if (result && typeof result.filePath === "string" && result.filePath) {
       const patch = Array.isArray(result.structuredPatch) ? result.structuredPatch : [];
       let added = 0;
@@ -272,10 +312,11 @@ function parseTranscript(content, since = null) {
       }
       edits.push({
         path: result.filePath,
-        timestamp: new Date(ts).toISOString(),
+        timestamp: at,
         lineChanges: added - removed,
         linesAdded: added,
-        linesRemoved: removed
+        linesRemoved: removed,
+        cwd
       });
     }
   }
@@ -287,24 +328,26 @@ function parseTranscript(content, since = null) {
     model,
     tokens,
     edits,
+    activity,
     firstSeen: firstSeen === null ? null : new Date(firstSeen).toISOString(),
-    lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString()
+    lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
+    carry
   };
 }
 function isEmpty(session) {
-  return session.edits.length === 0 && session.tokens.input === 0 && session.tokens.output === 0 && session.tokens.cacheRead === 0 && session.tokens.cacheWrite === 0;
+  return session.edits.length === 0 && session.activity.length === 0 && session.tokens.input === 0 && session.tokens.output === 0 && session.tokens.cacheRead === 0 && session.tokens.cacheWrite === 0;
 }
 
 // src/index.ts
-var VERSION = "0.1.0";
+var VERSION = "0.2.0";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join2(override || join2(homedir2(), ".claude"), "projects");
 }
-function transcriptPaths(since) {
+function transcripts() {
   const root = claudeProjectsDir();
   const out = [];
-  const walk = (dir) => {
+  const walk = (dir, subagent) => {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
@@ -314,30 +357,42 @@ function transcriptPaths(since) {
     for (const e of entries) {
       const full = join2(dir, e.name);
       if (e.isDirectory()) {
-        if (e.name === "subagents")
+        if (e.name === "tool-results")
           continue;
-        walk(full);
+        walk(full, subagent || e.name === "subagents");
         continue;
       }
       if (!e.name.endsWith(".jsonl"))
         continue;
       try {
-        if (since && statSync(full).mtime <= since)
-          continue;
-      } catch {
-        continue;
-      }
-      out.push(full);
+        const st = statSync(full);
+        out.push({ path: full, size: st.size, mtime: st.mtime, subagent });
+      } catch {}
     }
   };
-  walk(root);
+  walk(root, false);
   return out;
 }
-function gitRemote(cwd) {
-  if (!cwd)
-    return "";
+function readFrom(path, offset, size) {
+  const length = size - offset;
+  if (length <= 0)
+    return { text: "", end: offset };
+  const buf = Buffer.alloc(length);
+  const fd = openSync(path, "r");
+  let read = 0;
   try {
-    return execFileSync("git", ["remote", "get-url", "origin"], {
+    read = readSync(fd, buf, 0, length, offset);
+  } finally {
+    closeSync(fd);
+  }
+  const last = buf.subarray(0, read).lastIndexOf(10);
+  if (last < 0)
+    return { text: "", end: offset };
+  return { text: buf.subarray(0, last + 1).toString("utf8"), end: offset + last + 1 };
+}
+function git(cwd, args) {
+  try {
+    return execFileSync("git", args, {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -347,17 +402,47 @@ function gitRemote(cwd) {
     return "";
   }
 }
+function repoResolver() {
+  const cache = new Map;
+  const lookup = (dir) => {
+    const root = git(dir, ["rev-parse", "--show-toplevel"]);
+    if (!root)
+      return null;
+    const remote = git(root, ["remote", "get-url", "origin"]);
+    if (!remote)
+      return null;
+    const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    return { remote, root, branch: branch === "HEAD" ? "" : branch };
+  };
+  return (dir) => {
+    let d = dir;
+    while (d && !existsSync(d)) {
+      const up = dirname2(d);
+      if (up === d)
+        return null;
+      d = up;
+    }
+    if (!d)
+      return null;
+    const hit = cache.get(d);
+    if (hit !== undefined)
+      return hit;
+    const repo = lookup(d);
+    cache.set(d, repo);
+    return repo;
+  };
+}
 function openBrowser(url) {
   const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try {
     execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
   } catch {}
 }
-async function activate(config) {
-  const init = await startDeviceFlow(config.apiUrl, hostname(), process.platform);
+async function activate(config, cloud = false) {
+  const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform);
   openBrowser(init.verification_uri_complete);
   console.log("");
-  console.log("  Approve this machine in the browser tab that just opened.");
+  console.log(cloud ? "  Approve Claude Code cloud in the browser tab that just opened." : "  Approve this machine in the browser tab that just opened.");
   console.log(`  If it did not open: ${init.verification_uri_complete}`);
   console.log("");
   console.log(`  The code, if it asks: ${init.user_code}`);
@@ -369,10 +454,15 @@ async function activate(config) {
     delay = wait;
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
+      if (cloud) {
+        printCloudSetup(result.token);
+        return 0;
+      }
       save({
         ...config,
         deviceToken: result.token,
-        lastParsedAt: new Date().toISOString()
+        lastParsedAt: new Date().toISOString(),
+        files: {}
       });
       console.log("  Activated. Tracking starts now.");
       return 0;
@@ -385,18 +475,56 @@ async function activate(config) {
   console.error("  That code expired. Run activation again.");
   return 1;
 }
+var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
+function cloudHook(throttle) {
+  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
+  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
+}
+function printCloudSetup(deviceToken) {
+  const hook = (throttle) => [
+    { hooks: [{ type: "command", command: cloudHook(throttle), timeout: 20, async: true }] }
+  ];
+  const settings = {
+    hooks: {
+      SessionStart: hook(0),
+      UserPromptSubmit: hook(120),
+      PostToolUse: hook(120),
+      SubagentStop: hook(120),
+      Stop: hook(0),
+      SessionEnd: hook(0)
+    }
+  };
+  console.log("");
+  console.log("  Approved. Three steps in Claude Code on the web:");
+  console.log("");
+  console.log("  1. In the cloud environment's settings, add this environment variable:");
+  console.log("");
+  console.log(`     INLINR_TOKEN=${deviceToken}`);
+  console.log("");
+  console.log("  2. In the same settings, set network access to Custom, add inlinr.com,");
+  console.log("     and keep the default list of package managers.");
+  console.log("");
+  console.log("  3. Merge this into .claude/settings.json in each repository you work on:");
+  console.log("");
+  console.log(JSON.stringify(settings, null, 2).split(`
+`).map((l) => `     ${l}`).join(`
+`));
+  console.log("");
+  console.log("  Keep the token private: anyone using the environment can read it.");
+  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
+}
 async function status(config) {
-  const paths = transcriptPaths(null);
-  const since = config.lastParsedAt ? new Date(config.lastParsedAt) : null;
-  const pending = transcriptPaths(since).length;
+  const all = transcripts();
+  const pending = all.filter((t) => hasNew(config, t)).length;
+  const connected = token(config) ? config.deviceToken ? "connected" : "connected (INLINR_TOKEN)" : "not connected — run /inlinr:activate";
   console.log("");
   console.log(`  Plugin      ${VERSION}`);
   console.log(`  Machine     ${hostname()}`);
-  console.log(`  Account     ${config.deviceToken ? "connected" : "not connected — run /inlinr:activate"}`);
+  console.log(`  Account     ${connected}`);
   console.log(`  Server      ${config.apiUrl}`);
   console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
-  console.log(`  Transcripts ${paths.length} found, ${pending} with something new`);
-  if (config.deviceToken && paths.length === 0) {
+  console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
+  if (token(config) && all.length === 0) {
     console.log("");
     console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
     console.log("  so this is expected on a machine where you have not used it yet.");
@@ -411,16 +539,38 @@ async function status(config) {
 }
 async function deactivate(config) {
   if (!config.deviceToken) {
-    console.log("  This machine is not connected.");
+    console.log(token(config) ? "  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking." : "  This machine is not connected.");
     return 0;
   }
   const revoked = await revokeDevice(config.apiUrl, config.deviceToken);
-  save({ ...config, deviceToken: "", lastParsedAt: null, lastSyncAt: null });
+  save({
+    ...config,
+    deviceToken: "",
+    lastParsedAt: null,
+    lastSyncAt: null,
+    files: {}
+  });
   console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
   return 0;
 }
+function hasNew(config, t) {
+  const state = config.files[t.path];
+  if (state)
+    return t.size !== state.offset;
+  const since = config.lastParsedAt ? Date.parse(config.lastParsedAt) : Number.NaN;
+  return Number.isNaN(since) || t.mtime.getTime() > since;
+}
 async function sync(config, throttleSeconds) {
-  if (!config.deviceToken) {
+  const deviceToken = token(config);
+  if (!deviceToken) {
+    return 0;
+  }
+  if (!config.lastParsedAt) {
+    save({
+      ...config,
+      lastParsedAt: new Date().toISOString(),
+      lastSyncAt: new Date().toISOString()
+    });
     return 0;
   }
   if (throttleSeconds > 0 && config.lastSyncAt) {
@@ -428,45 +578,43 @@ async function sync(config, throttleSeconds) {
     if (Number.isFinite(age) && age < throttleSeconds * 1000)
       return 0;
   }
-  const since = config.lastParsedAt ? new Date(config.lastParsedAt) : null;
-  const paths = transcriptPaths(since);
-  if (paths.length === 0) {
-    save({ ...config, lastSyncAt: new Date().toISOString() });
-    return 0;
-  }
-  let newest = since;
+  const since = new Date(config.lastParsedAt);
+  const all = transcripts();
+  const files = {};
   const beats = [];
-  const remotes = new Map;
-  for (const path of paths) {
-    let content;
-    try {
-      content = readFileSync2(path, "utf8");
-    } catch {
+  const resolve = repoResolver();
+  for (const t of all) {
+    const state = config.files[t.path];
+    if (!hasNew(config, t)) {
+      if (state)
+        files[t.path] = state;
       continue;
     }
-    const session = parseTranscript(content, since);
+    const offset = state && state.offset <= t.size ? state.offset : 0;
+    let chunk;
+    try {
+      chunk = readFrom(t.path, offset, t.size);
+    } catch {
+      if (state)
+        files[t.path] = state;
+      continue;
+    }
+    const session = parseTranscript(chunk.text, {
+      since: state ? null : since,
+      carry: state && offset > 0 ? state.carry : null,
+      subagent: t.subagent
+    });
+    files[t.path] = { offset: chunk.end, carry: session?.carry ?? state?.carry ?? null };
     if (!session || isEmpty(session))
       continue;
-    let remote = remotes.get(session.cwd);
-    if (remote === undefined) {
-      remote = gitRemote(session.cwd);
-      remotes.set(session.cwd, remote);
-    }
-    if (!remote)
-      continue;
-    beats.push(...toHeartbeats(session, remote, VERSION));
-    if (session.lastSeen) {
-      const t = new Date(session.lastSeen);
-      if (!newest || t > newest)
-        newest = t;
-    }
+    beats.push(...toHeartbeats(session, resolve, VERSION));
   }
   if (beats.length > 0) {
-    await sendHeartbeats(config.apiUrl, config.deviceToken, beats);
+    await sendHeartbeats(config.apiUrl, deviceToken, beats);
   }
   save({
     ...config,
-    lastParsedAt: newest ? newest.toISOString() : config.lastParsedAt,
+    files,
     lastSyncAt: new Date().toISOString()
   });
   return 0;
@@ -475,7 +623,7 @@ async function main() {
   const args = process.argv.slice(2);
   const config = load();
   if (args[0] === "activate")
-    return activate(config);
+    return activate(config, args[1] === "--cloud");
   if (args[0] === "deactivate")
     return deactivate(config);
   if (args[0] === "status")
@@ -504,3 +652,6 @@ main().then((code) => process.exit(code)).catch((err) => {
   }
   process.exit(0);
 });
+export {
+  cloudHook
+};
