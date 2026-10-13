@@ -1,5 +1,7 @@
 ---
+name: activate
 description: Connect this machine to your Inlinr account
+disable-model-invocation: true
 ---
 
 Run this exact command **in the background** (it waits for the user, which can

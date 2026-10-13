@@ -1,5 +1,7 @@
 ---
+name: cloud
 description: Track Claude Code cloud sessions on Inlinr too
+disable-model-invocation: true
 ---
 
 Run this exact command **in the background** (it waits for the user, which can
