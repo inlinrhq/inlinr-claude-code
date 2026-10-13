@@ -9,13 +9,32 @@ import { join } from "node:path";
  * both should not end up activating twice, and a token is a token.
  */
 
+import type { Carry } from "./transcript";
+
+/** How far one transcript has been read. */
+export type FileState = {
+	/** Bytes already turned into heartbeats. Always at a line boundary. */
+	offset: number;
+	carry?: Carry | null;
+};
+
 export type Config = {
 	deviceToken: string;
 	apiUrl: string;
-	/** ISO. The newest transcript entry already turned into heartbeats. */
+	/**
+	 * ISO. Tracking starts here: a transcript read for the first time skips
+	 * everything at or before it. Set on activation, and never moved after —
+	 * each file then keeps its own position in `files`.
+	 *
+	 * It used to be the only watermark, advanced to the newest entry across
+	 * every session at once. Two sessions open side by side then raced: a
+	 * response that finished writing after the other session's newer line
+	 * had been read sat behind the watermark and was never sent.
+	 */
 	lastParsedAt: string | null;
 	/** ISO. When a sync last ran at all, so a throttle can decline cheaply. */
 	lastSyncAt: string | null;
+	files: Record<string, FileState>;
 };
 
 export const DEFAULT_API = "https://inlinr.com";
@@ -38,6 +57,8 @@ export function load(): Config {
 			lastParsedAt:
 				typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
 			lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
+			files:
+				raw.files && typeof raw.files === "object" ? raw.files : {},
 		};
 	} catch {
 		// Missing or unreadable means "not activated yet", which is a normal
@@ -47,8 +68,21 @@ export function load(): Config {
 			apiUrl: process.env.INLINR_API_URL?.trim() || DEFAULT_API,
 			lastParsedAt: null,
 			lastSyncAt: null,
+			files: {},
 		};
 	}
+}
+
+/**
+ * The token to send with, from the config file or the environment.
+ *
+ * `INLINR_TOKEN` is for machines nobody activates by hand: a Claude Code
+ * cloud session starts in a fresh container every time, so a token saved by
+ * `/inlinr:activate` is gone by the next one. Set once in the environment's
+ * settings, it applies to every session.
+ */
+export function token(config: Config): string {
+	return config.deviceToken || process.env.INLINR_TOKEN?.trim() || "";
 }
 
 export function save(config: Config): void {

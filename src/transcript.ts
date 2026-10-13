@@ -38,16 +38,45 @@ export type FileEdit = {
 	lineChanges: number;
 	linesAdded: number;
 	linesRemoved: number;
+	/** Where the session stood when it made the edit. */
+	cwd: string;
 };
+
+/**
+ * A moment the session was doing something: a prompt, a response, a tool
+ * result.
+ *
+ * This is what time is made of. Duration is computed from the gaps between
+ * beats, and a session that only produced beats on file edits looked idle
+ * through everything else — reading code, running tests, a long answer, a
+ * subagent at work. Twenty minutes of investigation before a one-line fix
+ * showed up as nothing, because the gap before the fix was over the timeout.
+ */
+export type Activity = {
+	at: string;
+	cwd: string;
+};
+
+/**
+ * What the last message id contributed, carried from one sync to the next.
+ *
+ * Lines for one streaming message are consecutive, but a sync can land
+ * between two of them. Without the carry, the next sync would see the id for
+ * the first time and add its totals on top of what was already sent.
+ */
+export type Carry = { id: string } & Tokens;
 
 export type Session = {
 	id: string;
+	/** The newest working directory seen. */
 	cwd: string;
 	model: string;
 	tokens: Tokens;
 	edits: FileEdit[];
+	activity: Activity[];
 	firstSeen: string | null;
 	lastSeen: string | null;
+	carry: Carry | null;
 };
 
 export const emptyTokens = (): Tokens => ({
@@ -67,33 +96,48 @@ type Usage = {
 const n = (v: unknown): number =>
 	typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
 
-/** What one message id has contributed so far, so it can be superseded. */
-type Contribution = { input: number; cacheRead: number; cacheWrite: number; output: number };
+export type ParseOptions = {
+	/** Skip entries at or before this instant. */
+	since?: Date | null;
+	/** The last message of the previous read of this file. */
+	carry?: Carry | null;
+	/**
+	 * A subagent's own file. Every line in it is flagged `isSidechain`, and
+	 * those lines exist nowhere else — the parent file only holds the call
+	 * and the final answer. Skipping them lost the subagent's time, tokens
+	 * and edits entirely.
+	 */
+	subagent?: boolean;
+};
 
 /**
- * Parse one transcript file's lines into a session.
+ * Parse transcript lines into a session.
  *
- * `since` skips entries at or before a watermark so a re-read costs nothing.
  * Lines that do not parse are skipped rather than aborting the file: a
  * transcript being appended to while we read it will have a partial last line,
  * and that is normal rather than exceptional.
  */
 export function parseTranscript(
 	content: string,
-	since: Date | null = null,
+	options: ParseOptions = {},
 ): Session | null {
-	const sinceMs = since ? since.getTime() : null;
+	const sinceMs = options.since ? options.since.getTime() : null;
 
 	let id = "";
 	let cwd = "";
 	let model = "";
 	const tokens = emptyTokens();
 	const edits: FileEdit[] = [];
+	const activity: Activity[] = [];
 	let firstSeen: number | null = null;
 	let lastSeen: number | null = null;
 
-	// Keyed by message id. Only the newest totals for an id count.
-	const seen = new Map<string, Contribution>();
+	// Keyed by message id. Only the newest totals for an id count. Lines of
+	// one message are consecutive, so only the last one needs to survive to
+	// the next sync.
+	let carry: Carry | null = options.carry ?? null;
+	const seen = new Map<string, Tokens>();
+	if (carry) seen.set(carry.id, carry);
 
 	for (const raw of content.split("\n")) {
 		const line = raw.trim();
@@ -106,9 +150,10 @@ export function parseTranscript(
 			continue;
 		}
 
-		// A subagent's work is already in its parent session's file, flagged.
-		// Counting it again doubles both tokens and edits.
-		if (entry.isSidechain === true) continue;
+		// In the main file, a sidechain line is a subagent's work logged by
+		// an older Claude Code alongside the parent's. Current versions write
+		// it to the subagent's own file, which is read on its own.
+		if (entry.isSidechain === true && !options.subagent) continue;
 
 		const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
 		if (Number.isNaN(ts)) continue;
@@ -118,57 +163,50 @@ export function parseTranscript(
 
 		if (sinceMs !== null && ts <= sinceMs) continue;
 
-		if (firstSeen === null || ts < firstSeen) firstSeen = ts;
-		if (lastSeen === null || ts > lastSeen) lastSeen = ts;
-
 		const message = entry.message as
 			| { id?: unknown; model?: unknown; usage?: Usage }
 			| undefined;
-		if (message && typeof message.model === "string" && message.model) {
-			model = message.model;
-		}
-
-		const usage = (message?.usage ?? (entry.usage as Usage | undefined)) ?? null;
-		if (usage) {
-			const next: Contribution = {
-				input: n(usage.input_tokens),
-				cacheRead: n(usage.cache_read_input_tokens),
-				cacheWrite: n(usage.cache_creation_input_tokens),
-				output: n(usage.output_tokens),
-			};
-			const key = typeof message?.id === "string" && message.id ? message.id : "";
-			if (key) {
-				const before = seen.get(key);
-				if (before) {
-					// Supersede rather than add. See the note at the top.
-					tokens.input += next.input - before.input;
-					tokens.cacheRead += next.cacheRead - before.cacheRead;
-					tokens.cacheWrite += next.cacheWrite - before.cacheWrite;
-					tokens.output += next.output - before.output;
-				} else {
-					tokens.input += next.input;
-					tokens.cacheRead += next.cacheRead;
-					tokens.cacheWrite += next.cacheWrite;
-					tokens.output += next.output;
-				}
-				seen.set(key, next);
-			} else {
-				// No id to key on. Counting it once is the only safe choice —
-				// dropping it loses real usage, and de-duplicating without a key
-				// would drop distinct messages that happen to match.
-				tokens.input += next.input;
-				tokens.cacheRead += next.cacheRead;
-				tokens.cacheWrite += next.cacheWrite;
-				tokens.output += next.output;
-			}
-		}
-
 		const result = entry.toolUseResult as
 			| {
 					filePath?: unknown;
 					structuredPatch?: Array<{ newLines?: unknown; oldLines?: unknown }>;
 			  }
 			| undefined;
+
+		// Only conversation lines are activity. Bookkeeping lines (queue
+		// operations, attachments, summaries) carry timestamps too, but they
+		// are written by Claude Code, not by anyone working.
+		if (!message && !result) continue;
+
+		if (firstSeen === null || ts < firstSeen) firstSeen = ts;
+		if (lastSeen === null || ts > lastSeen) lastSeen = ts;
+		const at = new Date(ts).toISOString();
+		activity.push({ at, cwd });
+
+		if (message && typeof message.model === "string" && message.model) {
+			model = message.model;
+		}
+
+		const usage = (message?.usage ?? (entry.usage as Usage | undefined)) ?? null;
+		if (usage) {
+			const next: Tokens = {
+				input: n(usage.input_tokens),
+				cacheRead: n(usage.cache_read_input_tokens),
+				cacheWrite: n(usage.cache_creation_input_tokens),
+				output: n(usage.output_tokens),
+			};
+			const key = typeof message?.id === "string" && message.id ? message.id : "";
+			// Supersede rather than add. See the note at the top.
+			const before = (key && seen.get(key)) || emptyTokens();
+			tokens.input += next.input - before.input;
+			tokens.cacheRead += next.cacheRead - before.cacheRead;
+			tokens.cacheWrite += next.cacheWrite - before.cacheWrite;
+			tokens.output += next.output - before.output;
+			// No id to key on: counted once, and nothing to supersede later.
+			if (key) seen.set(key, next);
+			carry = key ? { id: key, ...next } : null;
+		}
+
 		if (result && typeof result.filePath === "string" && result.filePath) {
 			const patch = Array.isArray(result.structuredPatch)
 				? result.structuredPatch
@@ -183,10 +221,11 @@ export function parseTranscript(
 			// line delta. Recording it keeps "files touched" honest.
 			edits.push({
 				path: result.filePath,
-				timestamp: new Date(ts).toISOString(),
+				timestamp: at,
 				lineChanges: added - removed,
 				linesAdded: added,
 				linesRemoved: removed,
+				cwd,
 			});
 		}
 	}
@@ -199,8 +238,10 @@ export function parseTranscript(
 		model,
 		tokens,
 		edits,
+		activity,
 		firstSeen: firstSeen === null ? null : new Date(firstSeen).toISOString(),
 		lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
+		carry,
 	};
 }
 
@@ -208,6 +249,7 @@ export function parseTranscript(
 export function isEmpty(session: Session): boolean {
 	return (
 		session.edits.length === 0 &&
+		session.activity.length === 0 &&
 		session.tokens.input === 0 &&
 		session.tokens.output === 0 &&
 		session.tokens.cacheRead === 0 &&

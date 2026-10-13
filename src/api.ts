@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import type { Session } from "./transcript";
 
 /**
@@ -147,21 +148,43 @@ export type Heartbeat = {
 	ai_cache_write_tokens?: number;
 };
 
+/** The repository a directory belongs to. */
+export type Repo = { remote: string; root: string; branch: string };
+export type ResolveRepo = (dir: string) => Repo | null;
+
+/**
+ * One activity beat per minute is plenty.
+ *
+ * Duration only needs the gaps to stay under the keystroke timeout (five
+ * minutes at the lowest), and a busy turn writes dozens of lines a minute.
+ */
+export const ACTIVITY_WINDOW_MS = 60 * 1000;
+
 /**
  * Turn a parsed session into heartbeats.
  *
- * One per file the assistant edited, plus one carrying the session's token
- * totals. The token beat is `type: "app"` rather than a file, because
- * attributing a whole conversation's tokens to whichever file happened to be
- * edited last would make the per-file numbers nonsense.
+ * Three kinds:
  *
- * `ai_lines_added` is set from the assistant's own patch summary. That is the
- * field the dashboard needs to say what share of the code an assistant wrote —
- * and it is exactly the field that was never being populated.
+ * - **Activity**, `type: "app"`: one per minute the session was doing
+ *   anything — a prompt, a response, a tool result. These are what make the
+ *   time real. With edits as the only beats, a session that read and ran
+ *   things for twenty minutes before changing one line counted one beat, and
+ *   one beat is no time at all.
+ * - **Files**, one per file per window the assistant edited, carrying its
+ *   own line attribution.
+ * - **Tokens**, on the last activity beat, so a conversation's usage is not
+ *   pinned to whichever file happened to be edited last.
+ *
+ * The project comes from where the work happened, not from where the session
+ * started. An edit belongs to the repository its file is in, and activity to
+ * the repository of the directory the session stood in at that moment.
+ * Keying everything on the session's starting directory dropped every
+ * session started in a folder holding several repositories — that folder has
+ * no remote of its own.
  */
 export function toHeartbeats(
 	session: Session,
-	gitRemote: string,
+	resolve: ResolveRepo,
 	pluginVersion: string,
 ): Heartbeat[] {
 	const plugin = `claude-code-inlinr/${pluginVersion}`;
@@ -171,15 +194,22 @@ export function toHeartbeats(
 		ai_tool: "claude-code" as const,
 		ai_session: session.id,
 		...(session.model ? { ai_model: session.model } : {}),
-		...(gitRemote ? { project_git_remote: gitRemote } : {}),
 	};
 
-	const beats: Heartbeat[] = coalesceEdits(session.edits).map((edit) => ({
+	const edits = coalesceEdits(session.edits).flatMap((edit) => {
+		const repo =
+			resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+		return repo ? [{ edit, repo }] : [];
+	});
+
+	const beats: Heartbeat[] = edits.map(({ edit, repo }) => ({
 		...base,
 		entity: edit.path,
 		type: "file",
 		time: Date.parse(edit.timestamp) / 1000,
 		category: "coding",
+		project_git_remote: repo.remote,
+		...(repo.branch ? { branch: repo.branch } : {}),
 		is_write: true,
 		lines_added: edit.linesAdded,
 		lines_deleted: edit.linesRemoved,
@@ -188,24 +218,57 @@ export function toHeartbeats(
 		ai_line_changes: edit.lineChanges,
 	}));
 
-	const t = session.tokens;
-	const anyTokens =
-		t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
-	if (anyTokens && session.lastSeen) {
-		beats.push({
+	// Activity in a directory with no repository — the parent folder of
+	// several — goes to the repository the session was editing nearest in
+	// time. Without any edit to go by, there is nothing to attribute it to.
+	const nearestEdit = (at: number): Repo | null => {
+		let best: Repo | null = null;
+		let bestGap = Number.POSITIVE_INFINITY;
+		for (const { edit, repo } of edits) {
+			const gap = Math.abs(Date.parse(edit.timestamp) - at);
+			if (gap < bestGap) {
+				bestGap = gap;
+				best = repo;
+			}
+		}
+		return best;
+	};
+
+	const windows = new Map<string, Heartbeat>();
+	for (const a of session.activity) {
+		const at = Date.parse(a.at);
+		if (Number.isNaN(at)) continue;
+		const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+		if (!repo) continue;
+		const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+		const found = windows.get(key);
+		// The latest moment in the window, like file beats.
+		if (found && found.time * 1000 >= at) continue;
+		windows.set(key, {
 			...base,
 			entity: "claude-code",
 			type: "app",
-			time: Date.parse(session.lastSeen) / 1000,
+			time: at / 1000,
 			category: "ai",
-			ai_input_tokens: t.input,
-			ai_output_tokens: t.output,
-			ai_cache_read_tokens: t.cacheRead,
-			ai_cache_write_tokens: t.cacheWrite,
+			project_git_remote: repo.remote,
+			...(repo.branch ? { branch: repo.branch } : {}),
 		});
 	}
+	const activity = [...windows.values()].sort((a, b) => a.time - b.time);
+	beats.push(...activity);
 
-	return beats;
+	const t = session.tokens;
+	const anyTokens =
+		t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
+	const last = activity.at(-1);
+	if (anyTokens && last) {
+		last.ai_input_tokens = t.input;
+		last.ai_output_tokens = t.output;
+		last.ai_cache_read_tokens = t.cacheRead;
+		last.ai_cache_write_tokens = t.cacheWrite;
+	}
+
+	return beats.sort((a, b) => a.time - b.time);
 }
 
 /** The server's own limit. Sending more is a 400, not a slow request. */
