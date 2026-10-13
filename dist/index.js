@@ -339,7 +339,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.2.0";
+var VERSION = "0.2.1";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join2(override || join2(homedir2(), ".claude"), "projects");
