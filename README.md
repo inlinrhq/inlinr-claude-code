@@ -45,6 +45,15 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 | `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
 | `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
 
+You do not have to type them. Ask Claude in plain words ("is Inlinr
+tracking?", "connect Inlinr", "update Inlinr") and it runs the right one, which
+is the only way in the desktop app's chat. `deactivate` is the exception: it
+only runs when you type it.
+
+If a session starts on a machine that is not connected, or whose device was
+removed from your account, Claude is told so and offers to fix it. Nothing is
+said when tracking works.
+
 There is deliberately no command to list your languages, sessions or files. The
 dashboard shows all of that with a period picker and drill-down, and a table of
 languages printed into a terminal is a thing people run once. `status` exists
@@ -84,7 +93,22 @@ claude plugin update inlinr@inlinr
 The plugin cache is keyed by version and will not re-fetch one it already has,
 so if that changes nothing, uninstall and install again. `/inlinr:status`
 prints the running version, which is the fastest way to tell whether an update
-actually took.
+actually took. In the desktop app, ask Claude to update Inlinr, or use the
+`/plugin` menu.
+
+To have every machine update on its own, set `autoUpdate` on the marketplace
+in `~/.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "inlinr": {
+      "source": { "source": "github", "repo": "inlinrhq/inlinr-claude-code" },
+      "autoUpdate": true
+    }
+  }
+}
+```
 
 ## Disconnecting
 
