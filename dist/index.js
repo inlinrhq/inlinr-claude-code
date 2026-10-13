@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync as mkdirSync2,
   openSync,
+  readFileSync as readFileSync2,
   readdirSync,
   readSync,
   statSync
@@ -227,6 +228,28 @@ function save(config) {
   renameSync(tmp, path);
 }
 
+// src/notice.ts
+function sessionNotice(connected, lastLogLine, now = Date.now()) {
+  if (!connected) {
+    return [
+      "Inlinr (time tracking plugin) is installed but this machine is not connected to an Inlinr account, so nothing is being tracked.",
+      "Mention this to the user once, briefly, at a natural point in your first reply, and offer to connect it.",
+      "If they agree, use the inlinr:activate skill."
+    ].join(" ");
+  }
+  const m = lastLogLine?.match(/^(\S+) .*HTTP 401/);
+  if (m?.[1]) {
+    const at = Date.parse(m[1]);
+    if (Number.isFinite(at) && now - at < 48 * 3600 * 1000) {
+      return [
+        "Inlinr (time tracking plugin) is installed but inlinr.com refused this machine's token: the device was probably removed from the account, so nothing is being tracked.",
+        "Mention this to the user once, briefly, and offer to reconnect it with the inlinr:activate skill."
+      ].join(" ");
+    }
+  }
+  return null;
+}
+
 // src/transcript.ts
 var emptyTokens = () => ({
   input: 0,
@@ -339,7 +362,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.2.2";
+var VERSION = "0.3.0";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join2(override || join2(homedir2(), ".claude"), "projects");
@@ -537,6 +560,29 @@ async function status(config) {
   console.log("");
   return 0;
 }
+function lastLogLine() {
+  try {
+    const lines = readFileSync2(join2(configDir(), "claude-code.log"), "utf8").trim().split(`
+`);
+    return lines[lines.length - 1] || null;
+  } catch {
+    return null;
+  }
+}
+function sessionCheck(config) {
+  if (process.env.CLAUDE_CODE_REMOTE === "true")
+    return 0;
+  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+  if (notice) {
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: notice
+      }
+    }));
+  }
+  return 0;
+}
 async function deactivate(config) {
   if (!config.deviceToken) {
     console.log(token(config) ? "  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking." : "  This machine is not connected.");
@@ -628,6 +674,8 @@ async function main() {
     return deactivate(config);
   if (args[0] === "status")
     return status(config);
+  if (args[0] === "session-check")
+    return sessionCheck(config);
   if (args[0] === "--version") {
     console.log(VERSION);
     return 0;

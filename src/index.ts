@@ -7,6 +7,7 @@ import {
 	existsSync,
 	mkdirSync,
 	openSync,
+	readFileSync,
 	readdirSync,
 	readSync,
 	statSync,
@@ -23,6 +24,7 @@ import {
 	toHeartbeats,
 } from "./api";
 import { type Config, configDir, load, save, token } from "./config";
+import { sessionNotice } from "./notice";
 import { isEmpty, parseTranscript } from "./transcript";
 
 /**
@@ -38,7 +40,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.2.2";
+const VERSION = "0.3.0";
 
 function claudeProjectsDir(): string {
 	const override = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -361,6 +363,34 @@ async function status(config: Config): Promise<number> {
 	return 0;
 }
 
+function lastLogLine(): string | null {
+	try {
+		const lines = readFileSync(join(configDir(), "claude-code.log"), "utf8")
+			.trim()
+			.split("\n");
+		return lines[lines.length - 1] || null;
+	} catch {
+		return null;
+	}
+}
+
+function sessionCheck(config: Config): number {
+	// Cloud sessions never have the plugin; their hooks live in the repository.
+	if (process.env.CLAUDE_CODE_REMOTE === "true") return 0;
+	const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+	if (notice) {
+		console.log(
+			JSON.stringify({
+				hookSpecificOutput: {
+					hookEventName: "SessionStart",
+					additionalContext: notice,
+				},
+			}),
+		);
+	}
+	return 0;
+}
+
 async function deactivate(config: Config): Promise<number> {
 	if (!config.deviceToken) {
 		console.log(
@@ -482,6 +512,7 @@ async function main(): Promise<number> {
 	if (args[0] === "activate") return activate(config, args[1] === "--cloud");
 	if (args[0] === "deactivate") return deactivate(config);
 	if (args[0] === "status") return status(config);
+	if (args[0] === "session-check") return sessionCheck(config);
 	if (args[0] === "--version") {
 		console.log(VERSION);
 		return 0;
