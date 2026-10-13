@@ -1,5 +1,7 @@
 ---
+name: status
 description: Check whether Inlinr tracking is working on this machine
+disable-model-invocation: true
 ---
 
 Run this exact command and show the user its full output:

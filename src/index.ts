@@ -38,7 +38,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 
 function claudeProjectsDir(): string {
 	const override = process.env.CLAUDE_CONFIG_DIR?.trim();

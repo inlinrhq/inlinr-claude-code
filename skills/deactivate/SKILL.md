@@ -1,5 +1,7 @@
 ---
+name: deactivate
 description: Disconnect this machine from your Inlinr account
+disable-model-invocation: true
 ---
 
 Run this exact command and show the user its full output:
