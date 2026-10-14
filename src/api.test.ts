@@ -143,7 +143,7 @@ describe("toHeartbeats", () => {
 			"2026-08-01T10:06:00.000Z",
 			"2026-08-01T10:12:00.000Z",
 		]);
-		expect(app[0]).toMatchObject({ type: "app", category: "ai", branch: "main" });
+		expect(app[0]).toMatchObject({ type: "app", category: "ai-coding", branch: "main" });
 	});
 
 	test("attributes an edit to the repository its file is in", () => {
