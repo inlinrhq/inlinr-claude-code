@@ -127,7 +127,7 @@ export type Heartbeat = {
 	entity: string;
 	type: "file" | "app";
 	time: number;
-	category: "coding" | "ai";
+	category: "coding" | "ai-coding";
 	project_git_remote?: string;
 	branch?: string;
 	language?: string;
@@ -249,7 +249,7 @@ export function toHeartbeats(
 			entity: "claude-code",
 			type: "app",
 			time: at / 1000,
-			category: "ai",
+			category: "ai-coding",
 			project_git_remote: repo.remote,
 			...(repo.branch ? { branch: repo.branch } : {}),
 		});

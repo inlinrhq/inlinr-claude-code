@@ -129,7 +129,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
       entity: "claude-code",
       type: "app",
       time: at / 1000,
-      category: "ai",
+      category: "ai-coding",
       project_git_remote: repo.remote,
       ...repo.branch ? { branch: repo.branch } : {}
     });
@@ -362,7 +362,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.3.0";
+var VERSION = "0.3.1";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join2(override || join2(homedir2(), ".claude"), "projects");
@@ -425,13 +425,18 @@ function git(cwd, args) {
     return "";
   }
 }
+function firstRemote(root) {
+  const name = git(root, ["remote"]).split(`
+`)[0]?.trim();
+  return name ? git(root, ["remote", "get-url", name]) : "";
+}
 function repoResolver() {
   const cache = new Map;
   const lookup = (dir) => {
     const root = git(dir, ["rev-parse", "--show-toplevel"]);
     if (!root)
       return null;
-    const remote = git(root, ["remote", "get-url", "origin"]);
+    const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
     if (!remote)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);

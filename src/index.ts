@@ -40,7 +40,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 function claudeProjectsDir(): string {
 	const override = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -127,6 +127,11 @@ function git(cwd: string, args: string[]): string {
 	}
 }
 
+function firstRemote(root: string): string {
+	const name = git(root, ["remote"]).split("\n")[0]?.trim();
+	return name ? git(root, ["remote", "get-url", name]) : "";
+}
+
 /**
  * The repository a directory belongs to, cached for the length of one sync.
  *
@@ -138,7 +143,12 @@ function repoResolver(): ResolveRepo {
 	const lookup = (dir: string): Repo | null => {
 		const root = git(dir, ["rev-parse", "--show-toplevel"]);
 		if (!root) return null;
-		const remote = git(root, ["remote", "get-url", "origin"]);
+		// `origin` first, else the first remote — the same rule as the CLI and
+		// the VS Code extension, so a fork whose only remote is `upstream` is
+		// tracked here too instead of silently skipped.
+		const remote =
+			git(root, ["remote", "get-url", "origin"]) ||
+			firstRemote(root);
 		if (!remote) return null;
 		// Checked out now, not when the line was written — the transcript's
 		// own `gitBranch` is the starting folder's, wrong for any other repo.
