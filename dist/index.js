@@ -8,8 +8,8 @@ import {
   existsSync,
   mkdirSync as mkdirSync2,
   openSync,
-  readFileSync as readFileSync2,
   readdirSync,
+  readFileSync as readFileSync2,
   readSync,
   statSync
 } from "node:fs";
@@ -411,7 +411,10 @@ function readFrom(path, offset, size) {
   const last = buf.subarray(0, read).lastIndexOf(10);
   if (last < 0)
     return { text: "", end: offset };
-  return { text: buf.subarray(0, last + 1).toString("utf8"), end: offset + last + 1 };
+  return {
+    text: buf.subarray(0, last + 1).toString("utf8"),
+    end: offset + last + 1
+  };
 }
 function git(cwd, args) {
   try {
@@ -510,7 +513,16 @@ function cloudHook(throttle) {
 }
 function printCloudSetup(deviceToken) {
   const hook = (throttle) => [
-    { hooks: [{ type: "command", command: cloudHook(throttle), timeout: 20, async: true }] }
+    {
+      hooks: [
+        {
+          type: "command",
+          command: cloudHook(throttle),
+          timeout: 20,
+          async: true
+        }
+      ]
+    }
   ];
   const settings = {
     hooks: {
@@ -655,7 +667,10 @@ async function sync(config, throttleSeconds) {
       carry: state && offset > 0 ? state.carry : null,
       subagent: t.subagent
     });
-    files[t.path] = { offset: chunk.end, carry: session?.carry ?? state?.carry ?? null };
+    files[t.path] = {
+      offset: chunk.end,
+      carry: session?.carry ?? state?.carry ?? null
+    };
     if (!session || isEmpty(session))
       continue;
     beats.push(...toHeartbeats(session, resolve, VERSION));

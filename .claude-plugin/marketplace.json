@@ -16,12 +16,7 @@
       "repository": "https://github.com/inlinrhq/inlinr-claude-code",
       "license": "BSD-3-Clause",
       "category": "productivity",
-      "keywords": [
-        "time tracking",
-        "productivity",
-        "analytics",
-        "inlinr"
-      ],
+      "keywords": ["time tracking", "productivity", "analytics", "inlinr"],
       "author": {
         "name": "Inlinr"
       }
