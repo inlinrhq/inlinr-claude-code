@@ -1,0 +1,45 @@
+name: CI
+
+# Pull requests only, like the other Inlinr repositories: nothing runs on a
+# schedule or on push.
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Versions agree
+        run: node scripts/check-version.mjs
+
+      - name: Types
+        run: bunx tsc --noEmit
+
+      - name: Tests
+        run: bun test
+
+      # Claude Code runs the committed bundle, not the sources: a change to
+      # src/ that was never rebuilt ships nothing.
+      - name: dist/ matches src/
+        run: |
+          bun run build
+          git diff --exit-code -- dist/
+
+      - uses: biomejs/setup-biome@v2
+        with:
+          version: 2.5.6
+
+      - name: Lint and format
+        run: biome ci .

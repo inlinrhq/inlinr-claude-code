@@ -11,11 +11,11 @@ import type { Session } from "./transcript";
  */
 
 export type DeviceInit = {
-	device_code: string;
-	user_code: string;
-	verification_uri_complete: string;
-	interval: number;
-	expires_in: number;
+  device_code: string;
+  user_code: string;
+  verification_uri_complete: string;
+  interval: number;
+  expires_in: number;
 };
 
 /**
@@ -28,53 +28,54 @@ export type DeviceInit = {
  * is for when you have three of them.
  */
 export async function startDeviceFlow(
-	apiUrl: string,
-	hostname: string,
-	platform: string,
+  apiUrl: string,
+  hostname: string,
+  platform: string,
 ): Promise<DeviceInit> {
-	const res = await fetch(`${apiUrl}/api/auth/device`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			client_name: hostname,
-			editor: "claude-code",
-			platform,
-		}),
-	});
-	if (!res.ok) throw new Error(`could not start activation (HTTP ${res.status})`);
-	return (await res.json()) as DeviceInit;
+  const res = await fetch(`${apiUrl}/api/auth/device`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: hostname,
+      editor: "claude-code",
+      platform,
+    }),
+  });
+  if (!res.ok)
+    throw new Error(`could not start activation (HTTP ${res.status})`);
+  return (await res.json()) as DeviceInit;
 }
 
 export type PollResult =
-	| { status: "pending" }
-	| { status: "denied"; error: string }
-	| { status: "ok"; token: string };
+  | { status: "pending" }
+  | { status: "denied"; error: string }
+  | { status: "ok"; token: string };
 
 export async function pollDeviceToken(
-	apiUrl: string,
-	deviceCode: string,
+  apiUrl: string,
+  deviceCode: string,
 ): Promise<PollResult> {
-	const res = await fetch(`${apiUrl}/api/auth/device/token`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ device_code: deviceCode }),
-	});
+  const res = await fetch(`${apiUrl}/api/auth/device/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ device_code: deviceCode }),
+  });
 
-	const body = (await res.json().catch(() => ({}))) as {
-		access_token?: unknown;
-		error?: unknown;
-	};
+  const body = (await res.json().catch(() => ({}))) as {
+    access_token?: unknown;
+    error?: unknown;
+  };
 
-	if (res.ok && typeof body.access_token === "string") {
-		return { status: "ok", token: body.access_token };
-	}
-	// `authorization_pending` is the normal answer while someone is still in
-	// the browser, not a failure to report.
-	if (body.error === "authorization_pending") return { status: "pending" };
-	return {
-		status: "denied",
-		error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
-	};
+  if (res.ok && typeof body.access_token === "string") {
+    return { status: "ok", token: body.access_token };
+  }
+  // `authorization_pending` is the normal answer while someone is still in
+  // the browser, not a failure to report.
+  if (body.error === "authorization_pending") return { status: "pending" };
+  return {
+    status: "denied",
+    error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
+  };
 }
 
 /**
@@ -94,58 +95,56 @@ export async function pollDeviceToken(
  */
 export const COALESCE_WINDOW_MS = 2 * 60 * 1000;
 
-export function coalesceEdits(
-	edits: Session["edits"],
-): Session["edits"] {
-	const byBucket = new Map<string, Session["edits"][number]>();
+export function coalesceEdits(edits: Session["edits"]): Session["edits"] {
+  const byBucket = new Map<string, Session["edits"][number]>();
 
-	for (const edit of edits) {
-		const at = Date.parse(edit.timestamp);
-		if (Number.isNaN(at)) continue;
-		const bucket = Math.floor(at / COALESCE_WINDOW_MS);
-		const key = `${edit.path}|${bucket}`;
-		const found = byBucket.get(key);
-		if (!found) {
-			byBucket.set(key, { ...edit });
-			continue;
-		}
-		found.linesAdded += edit.linesAdded;
-		found.linesRemoved += edit.linesRemoved;
-		found.lineChanges += edit.lineChanges;
-		// The latest moment in the bucket, so the beat sits at the end of the
-		// stretch of work it represents rather than at its start.
-		if (at > Date.parse(found.timestamp)) found.timestamp = edit.timestamp;
-	}
+  for (const edit of edits) {
+    const at = Date.parse(edit.timestamp);
+    if (Number.isNaN(at)) continue;
+    const bucket = Math.floor(at / COALESCE_WINDOW_MS);
+    const key = `${edit.path}|${bucket}`;
+    const found = byBucket.get(key);
+    if (!found) {
+      byBucket.set(key, { ...edit });
+      continue;
+    }
+    found.linesAdded += edit.linesAdded;
+    found.linesRemoved += edit.linesRemoved;
+    found.lineChanges += edit.lineChanges;
+    // The latest moment in the bucket, so the beat sits at the end of the
+    // stretch of work it represents rather than at its start.
+    if (at > Date.parse(found.timestamp)) found.timestamp = edit.timestamp;
+  }
 
-	return [...byBucket.values()].sort(
-		(a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp),
-	);
+  return [...byBucket.values()].sort(
+    (a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp),
+  );
 }
 
 /** The wire shape, snake_case, matching what the CLI and editors send. */
 export type Heartbeat = {
-	entity: string;
-	type: "file" | "app";
-	time: number;
-	category: "coding" | "ai";
-	project_git_remote?: string;
-	branch?: string;
-	language?: string;
-	editor: string;
-	plugin: string;
-	is_write?: boolean;
-	lines_added?: number;
-	lines_deleted?: number;
-	ai_lines_added?: number;
-	ai_lines_deleted?: number;
-	ai_line_changes?: number;
-	ai_tool: "claude-code";
-	ai_session?: string;
-	ai_model?: string;
-	ai_input_tokens?: number;
-	ai_output_tokens?: number;
-	ai_cache_read_tokens?: number;
-	ai_cache_write_tokens?: number;
+  entity: string;
+  type: "file" | "app";
+  time: number;
+  category: "coding" | "ai-coding";
+  project_git_remote?: string;
+  branch?: string;
+  language?: string;
+  editor: string;
+  plugin: string;
+  is_write?: boolean;
+  lines_added?: number;
+  lines_deleted?: number;
+  ai_lines_added?: number;
+  ai_lines_deleted?: number;
+  ai_line_changes?: number;
+  ai_tool: "claude-code";
+  ai_session?: string;
+  ai_model?: string;
+  ai_input_tokens?: number;
+  ai_output_tokens?: number;
+  ai_cache_read_tokens?: number;
+  ai_cache_write_tokens?: number;
 };
 
 /** The repository a directory belongs to. */
@@ -183,125 +182,126 @@ export const ACTIVITY_WINDOW_MS = 60 * 1000;
  * no remote of its own.
  */
 export function toHeartbeats(
-	session: Session,
-	resolve: ResolveRepo,
-	pluginVersion: string,
+  session: Session,
+  resolve: ResolveRepo,
+  pluginVersion: string,
 ): Heartbeat[] {
-	const plugin = `claude-code-inlinr/${pluginVersion}`;
-	const base = {
-		editor: "claude-code",
-		plugin,
-		ai_tool: "claude-code" as const,
-		ai_session: session.id,
-		...(session.model ? { ai_model: session.model } : {}),
-	};
+  const plugin = `claude-code-inlinr/${pluginVersion}`;
+  const base = {
+    editor: "claude-code",
+    plugin,
+    ai_tool: "claude-code" as const,
+    ai_session: session.id,
+    ...(session.model ? { ai_model: session.model } : {}),
+  };
 
-	const edits = coalesceEdits(session.edits).flatMap((edit) => {
-		const repo =
-			resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
-		return repo ? [{ edit, repo }] : [];
-	});
+  const edits = coalesceEdits(session.edits).flatMap((edit) => {
+    const repo =
+      resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    return repo ? [{ edit, repo }] : [];
+  });
 
-	const beats: Heartbeat[] = edits.map(({ edit, repo }) => ({
-		...base,
-		entity: edit.path,
-		type: "file",
-		time: Date.parse(edit.timestamp) / 1000,
-		category: "coding",
-		project_git_remote: repo.remote,
-		...(repo.branch ? { branch: repo.branch } : {}),
-		is_write: true,
-		lines_added: edit.linesAdded,
-		lines_deleted: edit.linesRemoved,
-		ai_lines_added: edit.linesAdded,
-		ai_lines_deleted: edit.linesRemoved,
-		ai_line_changes: edit.lineChanges,
-	}));
+  const beats: Heartbeat[] = edits.map(({ edit, repo }) => ({
+    ...base,
+    entity: edit.path,
+    type: "file",
+    time: Date.parse(edit.timestamp) / 1000,
+    category: "coding",
+    project_git_remote: repo.remote,
+    ...(repo.branch ? { branch: repo.branch } : {}),
+    is_write: true,
+    lines_added: edit.linesAdded,
+    lines_deleted: edit.linesRemoved,
+    ai_lines_added: edit.linesAdded,
+    ai_lines_deleted: edit.linesRemoved,
+    ai_line_changes: edit.lineChanges,
+  }));
 
-	// Activity in a directory with no repository — the parent folder of
-	// several — goes to the repository the session was editing nearest in
-	// time. Without any edit to go by, there is nothing to attribute it to.
-	const nearestEdit = (at: number): Repo | null => {
-		let best: Repo | null = null;
-		let bestGap = Number.POSITIVE_INFINITY;
-		for (const { edit, repo } of edits) {
-			const gap = Math.abs(Date.parse(edit.timestamp) - at);
-			if (gap < bestGap) {
-				bestGap = gap;
-				best = repo;
-			}
-		}
-		return best;
-	};
+  // Activity in a directory with no repository — the parent folder of
+  // several — goes to the repository the session was editing nearest in
+  // time. Without any edit to go by, there is nothing to attribute it to.
+  const nearestEdit = (at: number): Repo | null => {
+    let best: Repo | null = null;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const { edit, repo } of edits) {
+      const gap = Math.abs(Date.parse(edit.timestamp) - at);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = repo;
+      }
+    }
+    return best;
+  };
 
-	const windows = new Map<string, Heartbeat>();
-	for (const a of session.activity) {
-		const at = Date.parse(a.at);
-		if (Number.isNaN(at)) continue;
-		const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
-		if (!repo) continue;
-		const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
-		const found = windows.get(key);
-		// The latest moment in the window, like file beats.
-		if (found && found.time * 1000 >= at) continue;
-		windows.set(key, {
-			...base,
-			entity: "claude-code",
-			type: "app",
-			time: at / 1000,
-			category: "ai",
-			project_git_remote: repo.remote,
-			...(repo.branch ? { branch: repo.branch } : {}),
-		});
-	}
-	const activity = [...windows.values()].sort((a, b) => a.time - b.time);
-	beats.push(...activity);
+  const windows = new Map<string, Heartbeat>();
+  for (const a of session.activity) {
+    const at = Date.parse(a.at);
+    if (Number.isNaN(at)) continue;
+    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    if (!repo) continue;
+    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+    const found = windows.get(key);
+    // The latest moment in the window, like file beats.
+    if (found && found.time * 1000 >= at) continue;
+    windows.set(key, {
+      ...base,
+      entity: "claude-code",
+      type: "app",
+      time: at / 1000,
+      category: "ai-coding",
+      project_git_remote: repo.remote,
+      ...(repo.branch ? { branch: repo.branch } : {}),
+    });
+  }
+  const activity = [...windows.values()].sort((a, b) => a.time - b.time);
+  beats.push(...activity);
 
-	const t = session.tokens;
-	const anyTokens =
-		t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
-	const last = activity.at(-1);
-	if (anyTokens && last) {
-		last.ai_input_tokens = t.input;
-		last.ai_output_tokens = t.output;
-		last.ai_cache_read_tokens = t.cacheRead;
-		last.ai_cache_write_tokens = t.cacheWrite;
-	}
+  const t = session.tokens;
+  const anyTokens =
+    t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
+  const last = activity.at(-1);
+  if (anyTokens && last) {
+    last.ai_input_tokens = t.input;
+    last.ai_output_tokens = t.output;
+    last.ai_cache_read_tokens = t.cacheRead;
+    last.ai_cache_write_tokens = t.cacheWrite;
+  }
 
-	return beats.sort((a, b) => a.time - b.time);
+  return beats.sort((a, b) => a.time - b.time);
 }
 
 /** The server's own limit. Sending more is a 400, not a slow request. */
 export const MAX_BATCH = 1000;
 
 export async function sendHeartbeats(
-	apiUrl: string,
-	token: string,
-	beats: Heartbeat[],
+  apiUrl: string,
+  token: string,
+  beats: Heartbeat[],
 ): Promise<{ accepted: number }> {
-	let accepted = 0;
-	for (let i = 0; i < beats.length; i += MAX_BATCH) {
-		const chunk = beats.slice(i, i + MAX_BATCH);
-		const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				authorization: `Bearer ${token}`,
-			},
-			body: JSON.stringify(chunk),
-		});
-		if (!res.ok) {
-			// Throw with what got through, so the caller can advance a watermark
-			// over the part that landed instead of replaying or losing it.
-			throw Object.assign(
-				new Error(`ingest rejected a batch (HTTP ${res.status})`),
-				{ accepted },
-			);
-		}
-		const body = (await res.json().catch(() => ({}))) as { accepted?: unknown };
-		accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
-	}
-	return { accepted };
+  let accepted = 0;
+  for (let i = 0; i < beats.length; i += MAX_BATCH) {
+    const chunk = beats.slice(i, i + MAX_BATCH);
+    const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(chunk),
+    });
+    if (!res.ok) {
+      // Throw with what got through, so the caller can advance a watermark
+      // over the part that landed instead of replaying or losing it.
+      throw Object.assign(
+        new Error(`ingest rejected a batch (HTTP ${res.status})`),
+        { accepted },
+      );
+    }
+    const body = (await res.json().catch(() => ({}))) as { accepted?: unknown };
+    accepted +=
+      typeof body.accepted === "number" ? body.accepted : chunk.length;
+  }
+  return { accepted };
 }
 
 /**
@@ -312,16 +312,16 @@ export async function sendHeartbeats(
  * anyone recovers the file.
  */
 export async function revokeDevice(
-	apiUrl: string,
-	token: string,
+  apiUrl: string,
+  token: string,
 ): Promise<boolean> {
-	try {
-		const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
-			method: "POST",
-			headers: { authorization: `Bearer ${token}` },
-		});
-		return res.ok;
-	} catch {
-		return false;
-	}
+  try {
+    const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

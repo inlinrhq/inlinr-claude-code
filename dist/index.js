@@ -8,8 +8,8 @@ import {
   existsSync,
   mkdirSync as mkdirSync2,
   openSync,
-  readFileSync as readFileSync2,
   readdirSync,
+  readFileSync as readFileSync2,
   readSync,
   statSync
 } from "node:fs";
@@ -129,7 +129,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
       entity: "claude-code",
       type: "app",
       time: at / 1000,
-      category: "ai",
+      category: "ai-coding",
       project_git_remote: repo.remote,
       ...repo.branch ? { branch: repo.branch } : {}
     });
@@ -362,7 +362,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.3.0";
+var VERSION = "0.3.1";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join2(override || join2(homedir2(), ".claude"), "projects");
@@ -411,7 +411,10 @@ function readFrom(path, offset, size) {
   const last = buf.subarray(0, read).lastIndexOf(10);
   if (last < 0)
     return { text: "", end: offset };
-  return { text: buf.subarray(0, last + 1).toString("utf8"), end: offset + last + 1 };
+  return {
+    text: buf.subarray(0, last + 1).toString("utf8"),
+    end: offset + last + 1
+  };
 }
 function git(cwd, args) {
   try {
@@ -425,13 +428,18 @@ function git(cwd, args) {
     return "";
   }
 }
+function firstRemote(root) {
+  const name = git(root, ["remote"]).split(`
+`)[0]?.trim();
+  return name ? git(root, ["remote", "get-url", name]) : "";
+}
 function repoResolver() {
   const cache = new Map;
   const lookup = (dir) => {
     const root = git(dir, ["rev-parse", "--show-toplevel"]);
     if (!root)
       return null;
-    const remote = git(root, ["remote", "get-url", "origin"]);
+    const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
     if (!remote)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -505,7 +513,16 @@ function cloudHook(throttle) {
 }
 function printCloudSetup(deviceToken) {
   const hook = (throttle) => [
-    { hooks: [{ type: "command", command: cloudHook(throttle), timeout: 20, async: true }] }
+    {
+      hooks: [
+        {
+          type: "command",
+          command: cloudHook(throttle),
+          timeout: 20,
+          async: true
+        }
+      ]
+    }
   ];
   const settings = {
     hooks: {
@@ -650,7 +667,10 @@ async function sync(config, throttleSeconds) {
       carry: state && offset > 0 ? state.carry : null,
       subagent: t.subagent
     });
-    files[t.path] = { offset: chunk.end, carry: session?.carry ?? state?.carry ?? null };
+    files[t.path] = {
+      offset: chunk.end,
+      carry: session?.carry ?? state?.carry ?? null
+    };
     if (!session || isEmpty(session))
       continue;
     beats.push(...toHeartbeats(session, resolve, VERSION));
