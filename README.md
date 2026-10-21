@@ -205,6 +205,14 @@ writes on your machine:
 Work that cannot be tied to any git repository is skipped — there is no
 project to attribute it to.
 
+When a sync fails on your machine (not a network error, not the server
+refusing it), the plugin tells Inlinr, at most once a day for the same error:
+the error message and stack with your home folder replaced by `~`, the plugin
+version and your operating system. No token, nothing from the transcripts.
+Turn it off with `error_reports = false` under `[behavior]` in
+`~/.inlinr/config.toml`, `INLINR_ERROR_REPORTS=0`, or Claude Code's own
+`DISABLE_ERROR_REPORTING` / `DISABLE_TELEMETRY`.
+
 ## Troubleshooting
 
 **Nothing shows up.** Run `/inlinr:status`. It says whether this machine is

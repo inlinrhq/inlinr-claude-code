@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { type Config, configDir, load, save, token } from "./config";
 import { sessionNotice } from "./notice";
+import { reportError, reportsEnabled } from "./report";
 import { isEmpty, parseTranscript } from "./transcript";
 
 /**
@@ -588,13 +589,36 @@ function logFailure(err: unknown): void {
   }
 }
 
+/**
+ * A failed sync is also sent to Inlinr (see report.ts): the log tells the
+ * user, this tells us. The commands someone types report nothing, they see
+ * the error themselves.
+ */
+async function reportFailure(err: unknown): Promise<void> {
+  let configToml: string | null = null;
+  try {
+    configToml = readFileSync(join(configDir(), "config.toml"), "utf8");
+  } catch {
+    // No CLI config: reports stay on.
+  }
+  await reportError("sync", err, {
+    apiUrl: load().apiUrl,
+    version: VERSION,
+    enabled: reportsEnabled(process.env, configToml),
+    statePath: join(configDir(), "error-reports-claude-code.json"),
+  });
+}
+
+const INTERACTIVE = new Set(["activate", "deactivate", "status"]);
+
 main()
   .then((code) => process.exit(code))
-  .catch((err) => {
+  .catch(async (err) => {
     logFailure(err);
     if (process.argv[2] === "activate" || process.argv[2] === "deactivate") {
       console.error(`  ${(err as Error).message}`);
       process.exit(1);
     }
+    if (!INTERACTIVE.has(process.argv[2] ?? "")) await reportFailure(err);
     process.exit(0);
   });

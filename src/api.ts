@@ -294,7 +294,7 @@ export async function sendHeartbeats(
       // over the part that landed instead of replaying or losing it.
       throw Object.assign(
         new Error(`ingest rejected a batch (HTTP ${res.status})`),
-        { accepted },
+        { accepted, status: res.status },
       );
     }
     const body = (await res.json().catch(() => ({}))) as { accepted?: unknown };

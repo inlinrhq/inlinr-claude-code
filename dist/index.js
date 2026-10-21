@@ -6,15 +6,15 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
-  mkdirSync as mkdirSync2,
+  mkdirSync as mkdirSync3,
   openSync,
   readdirSync,
-  readFileSync as readFileSync2,
+  readFileSync as readFileSync3,
   readSync,
   statSync
 } from "node:fs";
-import { homedir as homedir2, hostname } from "node:os";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { homedir as homedir3, hostname } from "node:os";
+import { dirname as dirname2, join as join3 } from "node:path";
 
 // src/api.ts
 import { dirname } from "node:path";
@@ -161,7 +161,7 @@ async function sendHeartbeats(apiUrl, token, beats) {
       body: JSON.stringify(chunk)
     });
     if (!res.ok) {
-      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted });
+      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted, status: res.status });
     }
     const body = await res.json().catch(() => ({}));
     accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
@@ -248,6 +248,91 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
     }
   }
   return null;
+}
+
+// src/report.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
+var RESEND_AFTER_MS = 24 * 60 * 60 * 1000;
+var FORGET_AFTER_MS = 7 * RESEND_AFTER_MS;
+var TIMEOUT_MS = 3000;
+function reportsEnabled(env, configToml) {
+  const off = (v) => v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
+  if (env.INLINR_ERROR_REPORTS === "0")
+    return false;
+  if (off(env.DISABLE_ERROR_REPORTING) || off(env.DISABLE_TELEMETRY) || off(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)) {
+    return false;
+  }
+  return !(configToml && /^\s*error_reports\s*=\s*false\b/m.test(configToml));
+}
+function isServersOrNetworks(err) {
+  if (!(err instanceof Error))
+    return false;
+  if (typeof err.status === "number")
+    return true;
+  if (err.name === "AbortError" || err.name === "TimeoutError")
+    return true;
+  if (err instanceof TypeError && err.message === "fetch failed")
+    return true;
+  const code = err.code;
+  return typeof code === "string" && /^(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_)/.test(code);
+}
+function scrubHome(text, home = homedir2()) {
+  if (home.length < 3)
+    return text;
+  return text.split(home).join("~").split(home.replace(/\\/g, "/")).join("~");
+}
+function signature(context, message) {
+  return `${context}
+${message.replace(/\d{4,}/g, "#")}`;
+}
+function readSent(path) {
+  try {
+    const raw = JSON.parse(readFileSync2(path, "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+async function reportError(context, err, opts) {
+  try {
+    if (!opts.enabled || isServersOrNetworks(err))
+      return;
+    const error = err instanceof Error ? err : new Error(String(err));
+    const message = scrubHome(error.message);
+    const key = signature(context, message);
+    const t = (opts.now ?? Date.now)();
+    const sent = readSent(opts.statePath);
+    const last = sent[key];
+    if (last !== undefined && t - last < RESEND_AFTER_MS)
+      return;
+    sent[key] = t;
+    for (const [k, at] of Object.entries(sent)) {
+      if (t - at > FORGET_AFTER_MS)
+        delete sent[k];
+    }
+    try {
+      mkdirSync2(join2(opts.statePath, ".."), { recursive: true });
+      writeFileSync2(opts.statePath, JSON.stringify(sent), { mode: 384 });
+    } catch {}
+    const body = JSON.stringify({
+      source: "claude-code",
+      version: `claude-code-inlinr/${opts.version}`,
+      platform: `${process.platform}-${process.arch}`,
+      editor: "claude-code",
+      context,
+      message,
+      stack: error.stack ? scrubHome(error.stack) : null
+    });
+    const send = opts.send ?? ((url, b) => fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: b,
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    }));
+    await send(`${opts.apiUrl}/api/v1/plugin-errors`, body);
+  } catch {}
 }
 
 // src/transcript.ts
@@ -365,7 +450,7 @@ function isEmpty(session) {
 var VERSION = "0.3.1";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join2(override || join2(homedir2(), ".claude"), "projects");
+  return join3(override || join3(homedir3(), ".claude"), "projects");
 }
 function transcripts() {
   const root = claudeProjectsDir();
@@ -378,7 +463,7 @@ function transcripts() {
       return;
     }
     for (const e of entries) {
-      const full = join2(dir, e.name);
+      const full = join3(dir, e.name);
       if (e.isDirectory()) {
         if (e.name === "tool-results")
           continue;
@@ -569,7 +654,7 @@ async function status(config) {
     console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
     console.log("  so this is expected on a machine where you have not used it yet.");
   }
-  const log = join2(configDir(), "claude-code.log");
+  const log = join3(configDir(), "claude-code.log");
   if (existsSync(log)) {
     console.log("");
     console.log(`  Errors have been logged to ${log}`);
@@ -579,7 +664,7 @@ async function status(config) {
 }
 function lastLogLine() {
   try {
-    const lines = readFileSync2(join2(configDir(), "claude-code.log"), "utf8").trim().split(`
+    const lines = readFileSync3(join3(configDir(), "claude-code.log"), "utf8").trim().split(`
 `);
     return lines[lines.length - 1] || null;
   } catch {
@@ -708,16 +793,31 @@ function logFailure(err) {
   try {
     const line = `${new Date().toISOString()} ${err?.message ?? String(err)}
 `;
-    mkdirSync2(configDir(), { recursive: true });
-    appendFileSync(join2(configDir(), "claude-code.log"), line, "utf8");
+    mkdirSync3(configDir(), { recursive: true });
+    appendFileSync(join3(configDir(), "claude-code.log"), line, "utf8");
   } catch {}
 }
-main().then((code) => process.exit(code)).catch((err) => {
+async function reportFailure(err) {
+  let configToml = null;
+  try {
+    configToml = readFileSync3(join3(configDir(), "config.toml"), "utf8");
+  } catch {}
+  await reportError("sync", err, {
+    apiUrl: load().apiUrl,
+    version: VERSION,
+    enabled: reportsEnabled(process.env, configToml),
+    statePath: join3(configDir(), "error-reports-claude-code.json")
+  });
+}
+var INTERACTIVE = new Set(["activate", "deactivate", "status"]);
+main().then((code) => process.exit(code)).catch(async (err) => {
   logFailure(err);
   if (process.argv[2] === "activate" || process.argv[2] === "deactivate") {
     console.error(`  ${err.message}`);
     process.exit(1);
   }
+  if (!INTERACTIVE.has(process.argv[2] ?? ""))
+    await reportFailure(err);
   process.exit(0);
 });
 export {
