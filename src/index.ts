@@ -23,7 +23,14 @@ import {
   startDeviceFlow,
   toHeartbeats,
 } from "./api";
-import { type Config, configDir, load, save, token } from "./config";
+import {
+  acquireSyncLock,
+  type Config,
+  configDir,
+  load,
+  save,
+  token,
+} from "./config";
 import { sessionNotice } from "./notice";
 import { reportError, reportsEnabled } from "./report";
 import { isEmpty, parseTranscript } from "./transcript";
@@ -41,7 +48,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 
 function claudeProjectsDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -564,7 +571,14 @@ async function main(): Promise<number> {
 
   const i = args.indexOf("--throttle");
   const throttle = i >= 0 ? Number(args[i + 1] ?? 0) : 0;
-  return sync(config, Number.isFinite(throttle) ? throttle : 0);
+  const release = acquireSyncLock();
+  if (!release) return 0;
+  try {
+    // Read again under the lock: the sync that held it moved the positions.
+    return await sync(load(), Number.isFinite(throttle) ? throttle : 0);
+  } finally {
+    release();
+  }
 }
 
 // A tracker must never break the turn it is measuring. Every path returns 0

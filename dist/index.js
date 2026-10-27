@@ -4,14 +4,14 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
-  closeSync,
+  closeSync as closeSync2,
   existsSync,
   mkdirSync as mkdirSync3,
-  openSync,
+  openSync as openSync2,
   readdirSync,
   readFileSync as readFileSync3,
   readSync,
-  statSync
+  statSync as statSync2
 } from "node:fs";
 import { homedir as homedir3, hostname } from "node:os";
 import { dirname as dirname2, join as join3 } from "node:path";
@@ -181,7 +181,16 @@ async function revokeDevice(apiUrl, token) {
 }
 
 // src/config.ts
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 var DEFAULT_API = "https://inlinr.com";
@@ -219,13 +228,44 @@ function save(config) {
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
   const path = configPath();
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}
 `, {
     encoding: "utf8",
     mode: 384
   });
   renameSync(tmp, path);
+}
+var SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
+function acquireSyncLock(now = Date.now()) {
+  const dir = configDir();
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "claude-code.lock");
+  for (let attempt = 0;attempt < 2; attempt++) {
+    try {
+      closeSync(openSync(path, "wx", 384));
+      return () => {
+        try {
+          unlinkSync(path);
+        } catch {}
+      };
+    } catch (err) {
+      if (err.code !== "EEXIST")
+        throw err;
+      let age = 0;
+      try {
+        age = now - statSync(path).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (age < SYNC_LOCK_STALE_MS)
+        return null;
+      try {
+        unlinkSync(path);
+      } catch {}
+    }
+  }
+  return null;
 }
 
 // src/notice.ts
@@ -447,7 +487,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.4.0";
+var VERSION = "0.4.1";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join3(override || join3(homedir3(), ".claude"), "projects");
@@ -473,7 +513,7 @@ function transcripts() {
       if (!e.name.endsWith(".jsonl"))
         continue;
       try {
-        const st = statSync(full);
+        const st = statSync2(full);
         out.push({ path: full, size: st.size, mtime: st.mtime, subagent });
       } catch {}
     }
@@ -486,12 +526,12 @@ function readFrom(path, offset, size) {
   if (length <= 0)
     return { text: "", end: offset };
   const buf = Buffer.alloc(length);
-  const fd = openSync(path, "r");
+  const fd = openSync2(path, "r");
   let read = 0;
   try {
     read = readSync(fd, buf, 0, length, offset);
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
   }
   const last = buf.subarray(0, read).lastIndexOf(10);
   if (last < 0)
@@ -787,7 +827,14 @@ async function main() {
   }
   const i = args.indexOf("--throttle");
   const throttle = i >= 0 ? Number(args[i + 1] ?? 0) : 0;
-  return sync(config, Number.isFinite(throttle) ? throttle : 0);
+  const release = acquireSyncLock();
+  if (!release)
+    return 0;
+  try {
+    return await sync(load(), Number.isFinite(throttle) ? throttle : 0);
+  } finally {
+    release();
+  }
 }
 function logFailure(err) {
   try {
