@@ -1,4 +1,13 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -90,7 +99,9 @@ export function save(config: Config): void {
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
   const path = configPath();
-  const tmp = `${path}.tmp`;
+  // Its own temporary file: two processes sharing one name rename it from
+  // under each other (ENOENT on rename).
+  const tmp = `${path}.${process.pid}.tmp`;
   // Write then rename: a crash mid-write must not leave a truncated file that
   // would reset the watermark and replay the whole history.
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, {
@@ -98,4 +109,49 @@ export function save(config: Config): void {
     mode: 0o600,
   });
   renameSync(tmp, path);
+}
+
+/** A sync older than this is taken for dead: its lock no longer counts. */
+export const SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * Hold the sync to one process at a time.
+ *
+ * Hooks run asynchronously and can overlap: two syncs then read the same
+ * transcript lines and both send them, counting the time, lines and tokens
+ * twice. Returns a release function, or null when another sync holds the
+ * lock (that one sends the same lines; the next hook picks up the rest).
+ */
+export function acquireSyncLock(now = Date.now()): (() => void) | null {
+  const dir = configDir();
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "claude-code.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      closeSync(openSync(path, "wx", 0o600));
+      return () => {
+        try {
+          unlinkSync(path);
+        } catch {
+          // Already gone: nothing to release.
+        }
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      let age = 0;
+      try {
+        age = now - statSync(path).mtimeMs;
+      } catch {
+        continue; // Released between the two calls: try again.
+      }
+      if (age < SYNC_LOCK_STALE_MS) return null;
+      // Left by a sync that crashed or was killed.
+      try {
+        unlinkSync(path);
+      } catch {
+        // Another process took it over first.
+      }
+    }
+  }
+  return null;
 }
