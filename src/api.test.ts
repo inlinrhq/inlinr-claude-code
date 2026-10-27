@@ -19,8 +19,14 @@ const edit = (
 
 const act = (at: string, cwd = "/repo") => ({ at, cwd });
 
-/** `/repo` and `/other` are repositories; `/work`, their parent, is not. */
+/**
+ * `/repo` and `/other` are repositories; `/work`, their parent, is not;
+ * `/local` is a repository with no remote.
+ */
 const resolve = (dir: string): Repo | null => {
+  if (dir === "/local" || dir.startsWith("/local/")) {
+    return { root: "/local", remote: "", project: "local", branch: "main" };
+  }
   for (const root of ["/repo", "/other"]) {
     if (dir === root || dir.startsWith(`${root}/`)) {
       return {
@@ -44,6 +50,25 @@ const session = (over: Partial<Session> = {}): Session => ({
   firstSeen: "2026-08-01T10:00:00.000Z",
   lastSeen: "2026-08-01T10:05:00.000Z",
   ...over,
+});
+
+describe("a repository with no remote", () => {
+  test("is sent by its folder's name", () => {
+    const beats = toHeartbeats(
+      session({
+        cwd: "/local",
+        edits: [edit("/local/a.ts", "2026-08-01T10:00:00Z", 3, 1, "/local")],
+        activity: [act("2026-08-01T10:00:00Z", "/local")],
+      }),
+      resolve,
+      "0.0.0",
+    );
+    expect(beats.length).toBeGreaterThan(0);
+    for (const b of beats) {
+      expect(b.project).toBe("local");
+      expect(b.project_git_remote).toBeUndefined();
+    }
+  });
 });
 
 describe("coalesceEdits", () => {
