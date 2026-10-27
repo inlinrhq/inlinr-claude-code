@@ -44,6 +44,7 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 | `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
 | `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
 | `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
+| `/inlinr:upgrade <package> [version]` | Upgrade an npm dependency: reads its breaking changes, migration guides and advisories from Inlinr, finds where the code uses it, upgrades, fixes and runs your checks. Only the package name and the two versions are sent. |
 
 You do not have to type them. Ask Claude in plain words ("is Inlinr
 tracking?", "connect Inlinr", "update Inlinr") and it runs the right one, which
