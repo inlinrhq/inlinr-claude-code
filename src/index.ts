@@ -13,7 +13,7 @@ import {
   statSync,
 } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   pollDeviceToken,
   type Repo,
@@ -48,7 +48,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.4.1";
+const VERSION = "0.4.2";
 
 function claudeProjectsDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -168,11 +168,15 @@ function repoResolver(): ResolveRepo {
     // tracked here too instead of silently skipped.
     const remote =
       git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
-    if (!remote) return null;
+    // A repository with no remote (not pushed yet, or local only) goes by
+    // its folder's name. A folder outside any repository stays skipped: it
+    // is often the parent of several, whose activity belongs to them.
+    const project = remote ? undefined : basename(root);
+    if (!remote && !project) return null;
     // Checked out now, not when the line was written — the transcript's
     // own `gitBranch` is the starting folder's, wrong for any other repo.
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    return { remote, root, branch: branch === "HEAD" ? "" : branch };
+    return { remote, project, root, branch: branch === "HEAD" ? "" : branch };
   };
   return (dir: string) => {
     let d = dir;

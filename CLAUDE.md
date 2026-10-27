@@ -52,7 +52,9 @@ dist/index.js     # the committed bundle Claude Code actually runs
   repository's `main` and runs it only when `CLAUDE_CODE_REMOTE=true`, with
   the token from `INLINR_TOKEN`. **So `main`'s `dist/` is live the moment it
   merges.**
-- Work in a folder with no git remote is skipped (no project to put it in).
+- Work outside any git repository is skipped (no project to put it in; it
+  is often the parent folder of several). A repository with no remote is
+  sent as `project`, its folder's name (needs inlinr-web with `project`).
   `origin` first, else the first remote: the same rule as the CLI and the
   extension.
 

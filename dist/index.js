@@ -14,7 +14,7 @@ import {
   statSync as statSync2
 } from "node:fs";
 import { homedir as homedir3, hostname } from "node:os";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { basename, dirname as dirname2, join as join3 } from "node:path";
 
 // src/api.ts
 import { dirname } from "node:path";
@@ -71,6 +71,9 @@ function coalesceEdits(edits) {
   }
   return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 }
+function projectOf(repo) {
+  return repo.remote ? { project_git_remote: repo.remote } : { project: repo.project };
+}
 var ACTIVITY_WINDOW_MS = 60 * 1000;
 function toHeartbeats(session, resolve, pluginVersion) {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
@@ -91,7 +94,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
     type: "file",
     time: Date.parse(edit.timestamp) / 1000,
     category: "coding",
-    project_git_remote: repo.remote,
+    ...projectOf(repo),
     ...repo.branch ? { branch: repo.branch } : {},
     is_write: true,
     lines_added: edit.linesAdded,
@@ -130,7 +133,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
       type: "app",
       time: at / 1000,
       category: "ai-coding",
-      project_git_remote: repo.remote,
+      ...projectOf(repo),
       ...repo.branch ? { branch: repo.branch } : {}
     });
   }
@@ -487,7 +490,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.4.1";
+var VERSION = "0.4.2";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join3(override || join3(homedir3(), ".claude"), "projects");
@@ -565,10 +568,11 @@ function repoResolver() {
     if (!root)
       return null;
     const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
-    if (!remote)
+    const project = remote ? undefined : basename(root);
+    if (!remote && !project)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    return { remote, root, branch: branch === "HEAD" ? "" : branch };
+    return { remote, project, root, branch: branch === "HEAD" ? "" : branch };
   };
   return (dir) => {
     let d = dir;

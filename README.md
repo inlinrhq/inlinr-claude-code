@@ -199,11 +199,12 @@ writes on your machine:
 | Lines added / removed per edit | The code itself |
 | Input / output / cache token counts | Your prompts |
 | Model name, session id | Assistant responses |
-| Repository remote and branch | Anything from a folder with no git remote |
+| Repository remote and branch (the folder's name for a repository with no remote) | Anything from a folder outside any git repository |
 | When the session was active, to the minute | |
 
 Work that cannot be tied to any git repository is skipped — there is no
-project to attribute it to.
+project to attribute it to. A repository with no remote (local only, or not
+pushed yet) is tracked under its folder's name; the path is never sent.
 
 When a sync fails on your machine (not a network error, not the server
 refusing it), the plugin tells Inlinr, at most once a day for the same error:

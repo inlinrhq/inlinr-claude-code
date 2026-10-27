@@ -128,6 +128,8 @@ export type Heartbeat = {
   time: number;
   category: "coding" | "ai-coding";
   project_git_remote?: string;
+  /** A repository with no remote: its folder's name instead. */
+  project?: string;
   branch?: string;
   language?: string;
   editor: string;
@@ -147,8 +149,25 @@ export type Heartbeat = {
   ai_cache_write_tokens?: number;
 };
 
-/** The repository a directory belongs to. */
-export type Repo = { remote: string; root: string; branch: string };
+/**
+ * The repository a directory belongs to. `remote` is empty for a repository
+ * with no remote, sent by its folder's name (`project`) instead.
+ */
+export type Repo = {
+  remote: string;
+  project?: string;
+  root: string;
+  branch: string;
+};
+
+/** Where a beat's project comes from: the remote, else the folder's name. */
+function projectOf(
+  repo: Repo,
+): Pick<Heartbeat, "project_git_remote" | "project"> {
+  return repo.remote
+    ? { project_git_remote: repo.remote }
+    : { project: repo.project };
+}
 export type ResolveRepo = (dir: string) => Repo | null;
 
 /**
@@ -207,7 +226,7 @@ export function toHeartbeats(
     type: "file",
     time: Date.parse(edit.timestamp) / 1000,
     category: "coding",
-    project_git_remote: repo.remote,
+    ...projectOf(repo),
     ...(repo.branch ? { branch: repo.branch } : {}),
     is_write: true,
     lines_added: edit.linesAdded,
@@ -249,7 +268,7 @@ export function toHeartbeats(
       type: "app",
       time: at / 1000,
       category: "ai-coding",
-      project_git_remote: repo.remote,
+      ...projectOf(repo),
       ...(repo.branch ? { branch: repo.branch } : {}),
     });
   }
