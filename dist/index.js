@@ -197,6 +197,20 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 var DEFAULT_API = "https://inlinr.com";
+function trustedApiUrl(raw) {
+  const value = raw?.trim();
+  if (!value)
+    return DEFAULT_API;
+  try {
+    const url = new URL(value);
+    const local = (url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    const ours = url.protocol === "https:" && (url.hostname === "inlinr.com" || url.hostname === "www.inlinr.com") && !url.port;
+    if ((local || ours) && !url.username && !url.password) {
+      return url.origin;
+    }
+  } catch {}
+  return DEFAULT_API;
+}
 function configDir() {
   const override = process.env.INLINR_HOME?.trim();
   if (override)
@@ -209,7 +223,7 @@ function load() {
     const raw = JSON.parse(readFileSync(configPath(), "utf8"));
     return {
       deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
-      apiUrl: typeof raw.apiUrl === "string" && raw.apiUrl ? raw.apiUrl : DEFAULT_API,
+      apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
       lastParsedAt: typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
       lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
       files: raw.files && typeof raw.files === "object" ? raw.files : {}
@@ -217,7 +231,7 @@ function load() {
   } catch {
     return {
       deviceToken: "",
-      apiUrl: process.env.INLINR_API_URL?.trim() || DEFAULT_API,
+      apiUrl: trustedApiUrl(process.env.INLINR_API_URL),
       lastParsedAt: null,
       lastSyncAt: null,
       files: {}

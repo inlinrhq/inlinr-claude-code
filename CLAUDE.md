@@ -80,6 +80,9 @@ bun run build
 
 ## Contract (sync with `inlinrhq/inlinr-web` — verify before changing)
 
+- Server: `https://inlinr.com` only (`trustedApiUrl` in `src/config.ts`);
+  `INLINR_API_URL` or a saved `apiUrl` elsewhere is ignored, `localhost`
+  excepted, since a repository can set Claude Code's environment.
 - Device flow: `POST /api/auth/device` with
   `{ client_name, editor: "claude-code", platform }`, then poll
   `POST /api/auth/device/token`; revoke with `POST /api/auth/device/revoke`.
