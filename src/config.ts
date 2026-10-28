@@ -48,6 +48,34 @@ export type Config = {
 
 export const DEFAULT_API = "https://inlinr.com";
 
+/**
+ * The server to talk to: inlinr.com, or this machine for development. The
+ * token and every beat go there, and a repository can set environment
+ * variables for Claude Code (`env` in its .claude/settings.json), so any
+ * other address, `http://` included, falls back to inlinr.com rather than
+ * hand them to whoever wrote that file.
+ */
+export function trustedApiUrl(raw: string | undefined | null): string {
+  const value = raw?.trim();
+  if (!value) return DEFAULT_API;
+  try {
+    const url = new URL(value);
+    const local =
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    const ours =
+      url.protocol === "https:" &&
+      (url.hostname === "inlinr.com" || url.hostname === "www.inlinr.com") &&
+      !url.port;
+    if ((local || ours) && !url.username && !url.password) {
+      return url.origin;
+    }
+  } catch {
+    // Not a URL: the default.
+  }
+  return DEFAULT_API;
+}
+
 export function configDir(): string {
   const override = process.env.INLINR_HOME?.trim();
   if (override) return override;
@@ -63,8 +91,7 @@ export function load(): Config {
     ) as Partial<Config>;
     return {
       deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
-      apiUrl:
-        typeof raw.apiUrl === "string" && raw.apiUrl ? raw.apiUrl : DEFAULT_API,
+      apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
       lastParsedAt:
         typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
       lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
@@ -75,7 +102,7 @@ export function load(): Config {
     // state rather than an error worth surfacing on every hook.
     return {
       deviceToken: "",
-      apiUrl: process.env.INLINR_API_URL?.trim() || DEFAULT_API,
+      apiUrl: trustedApiUrl(process.env.INLINR_API_URL),
       lastParsedAt: null,
       lastSyncAt: null,
       files: {},

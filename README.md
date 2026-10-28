@@ -85,6 +85,10 @@ reads a repository's hooks only in single-repository cloud sessions.
 `INLINR_TOKEN` works on any machine, not only in the cloud: a token from the
 environment is used whenever none has been saved by `/inlinr:activate`.
 
+The token and the beats only ever go to `https://inlinr.com`: since 0.5.1 an
+`INLINR_API_URL` pointing anywhere else (a repository can set environment
+variables for Claude Code) is ignored, except `localhost` for development.
+
 ## Updating
 
 ```
