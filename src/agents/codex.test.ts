@@ -17,11 +17,7 @@ const meta = (at = "2026-10-01T10:00:00.000Z", extra = {}) =>
 const turn = (at: string, cwd = "/repo", model = "gpt-5.5-codex") =>
   line(at, "turn_context", { cwd, model });
 
-const tokenCount = (
-  at: string,
-  last: Record<string, number>,
-  total: number,
-) =>
+const tokenCount = (at: string, last: Record<string, number>, total: number) =>
   line(at, "event_msg", {
     type: "token_count",
     info: {
@@ -52,7 +48,11 @@ const patchCall = (at: string, id = "call_1", input = PATCH) =>
     input,
   });
 
-const patchOutput = (at: string, id = "call_1", output = "Success. Updated the following files:\nM src/a.ts") =>
+const patchOutput = (
+  at: string,
+  id = "call_1",
+  output = "Success. Updated the following files:\nM src/a.ts",
+) =>
   line(at, "response_item", {
     type: "custom_tool_call_output",
     call_id: id,
@@ -68,11 +68,9 @@ describe("parsePatch", () => {
   });
 
   test("follows a move", () => {
-    const moved = [
-      "*** Update File: a.ts",
-      "*** Move to: b.ts",
-      "+x",
-    ].join("\n");
+    const moved = ["*** Update File: a.ts", "*** Move to: b.ts", "+x"].join(
+      "\n",
+    );
     expect(parsePatch(moved, "/r")).toEqual([
       { path: "/r/b.ts", added: 1, removed: 0 },
     ]);
@@ -103,7 +101,11 @@ describe("parseCodex", () => {
   });
 
   test("counts a token_count once, even when it is emitted again", () => {
-    const usage = { input_tokens: 100, cached_input_tokens: 40, output_tokens: 10 };
+    const usage = {
+      input_tokens: 100,
+      cached_input_tokens: 40,
+      output_tokens: 10,
+    };
     const { session } = parseCodex(
       [
         meta(),
@@ -144,7 +146,9 @@ describe("parseCodex", () => {
         patchOutput("2026-10-01T10:00:11.000Z"),
       ].join("\n"),
     );
-    expect(session?.edits.map((e) => [e.path, e.linesAdded, e.linesRemoved])).toEqual([
+    expect(
+      session?.edits.map((e) => [e.path, e.linesAdded, e.linesRemoved]),
+    ).toEqual([
       ["/repo/src/a.ts", 2, 1],
       ["/abs/b.ts", 2, 0],
     ]);
@@ -155,7 +159,11 @@ describe("parseCodex", () => {
       [
         meta(),
         patchCall("2026-10-01T10:00:10.000Z"),
-        patchOutput("2026-10-01T10:00:11.000Z", "call_1", "apply_patch verification failed"),
+        patchOutput(
+          "2026-10-01T10:00:11.000Z",
+          "call_1",
+          "apply_patch verification failed",
+        ),
       ].join("\n"),
     );
     expect(session?.edits).toEqual([]);
@@ -163,7 +171,11 @@ describe("parseCodex", () => {
 
   test("carries the session and a pending patch to the next read", () => {
     const first = parseCodex(
-      [meta(), turn("2026-10-01T10:00:01.000Z"), patchCall("2026-10-01T10:00:10.000Z")].join("\n"),
+      [
+        meta(),
+        turn("2026-10-01T10:00:01.000Z"),
+        patchCall("2026-10-01T10:00:10.000Z"),
+      ].join("\n"),
     );
     expect(first.session?.edits).toEqual([]);
     const second = parseCodex(patchOutput("2026-10-01T10:00:11.000Z"), {
@@ -205,7 +217,9 @@ describe("parseCodex", () => {
           type: "message",
           role: "user",
         }),
-        line("2026-10-01T10:00:30.000Z", "event_msg", { type: "agent_message" }),
+        line("2026-10-01T10:00:30.000Z", "event_msg", {
+          type: "agent_message",
+        }),
       ].join("\n"),
     );
     expect(session?.activity.map((a) => a.at)).toEqual([

@@ -28,11 +28,7 @@ import {
   setupCodex,
   setupGemini,
 } from "./agents/setup";
-import {
-  codexFiles,
-  geminiFiles,
-  type SessionFile,
-} from "./agents/sources";
+import { codexFiles, geminiFiles, type SessionFile } from "./agents/sources";
 import {
   pollDeviceToken,
   type Repo,
@@ -658,7 +654,11 @@ async function main(): Promise<number> {
   if (args[0] === "activate") {
     const e = args.indexOf("--editor");
     const editor = e >= 0 ? args[e + 1] : "claude-code";
-    if (editor !== "claude-code" && editor !== "codex" && editor !== "gemini-cli") {
+    if (
+      editor !== "claude-code" &&
+      editor !== "codex" &&
+      editor !== "gemini-cli"
+    ) {
       console.error("  --editor takes claude-code, codex or gemini-cli.");
       return 2;
     }
@@ -676,11 +676,11 @@ async function main(): Promise<number> {
   // A hook that waits for its command (Gemini CLI's) gets its answer now,
   // and the sync goes on in a process of its own.
   if (args.includes("--detach")) {
-    spawn(
-      process.execPath,
-      [self(), ...args.filter((a) => a !== "--detach")],
-      { detached: true, stdio: "ignore", windowsHide: true },
-    ).unref();
+    spawn(process.execPath, [self(), ...args.filter((a) => a !== "--detach")], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    }).unref();
     // Gemini CLI reads a hook's output as JSON.
     if (args.includes("gemini-cli")) console.log("{}");
     return 0;

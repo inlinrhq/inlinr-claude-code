@@ -23,7 +23,13 @@ const gemini = (id: string, at: string, extra: Record<string, unknown> = {}) =>
     ...extra,
   });
 
-const tokens = { input: 1000, cached: 600, output: 40, thoughts: 10, total: 1050 };
+const tokens = {
+  input: 1000,
+  cached: 600,
+  output: 40,
+  thoughts: 10,
+  total: 1050,
+};
 
 const edit = (id: string, at: string, status = "success") => ({
   id,
@@ -32,7 +38,11 @@ const edit = (id: string, at: string, status = "success") => ({
   status,
   timestamp: at,
   resultDisplay: {
-    diffStat: { model_added_lines: 3, model_removed_lines: 1, user_added_lines: 9 },
+    diffStat: {
+      model_added_lines: 3,
+      model_removed_lines: 1,
+      user_added_lines: 9,
+    },
   },
 });
 

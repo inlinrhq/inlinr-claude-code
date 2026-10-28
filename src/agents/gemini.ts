@@ -149,8 +149,7 @@ export function parseGemini(
     if (fresh && !messages.has(record.id)) seen(ts);
     if (type !== "gemini") continue;
 
-    if (typeof record.model === "string" && record.model)
-      model = record.model;
+    if (typeof record.model === "string" && record.model) model = record.model;
 
     const next = geminiTokens(record.tokens as GeminiTokens | null);
     const before = messages.get(record.id);

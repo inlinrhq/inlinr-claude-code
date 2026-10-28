@@ -1460,7 +1460,11 @@ async function main() {
     return 0;
   }
   if (args.includes("--detach")) {
-    spawn(process.execPath, [self(), ...args.filter((a) => a !== "--detach")], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    spawn(process.execPath, [self(), ...args.filter((a) => a !== "--detach")], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    }).unref();
     if (args.includes("gemini-cli"))
       console.log("{}");
     return 0;

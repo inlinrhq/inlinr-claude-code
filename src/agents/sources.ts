@@ -52,7 +52,8 @@ export function codexFiles(home = codexHome()): SessionFile[] {
   const out: SessionFile[] = [];
   const add = (path: string) => {
     const st = stat(path);
-    if (st) out.push({ tool: "codex", key: `codex:${basename(path)}`, path, ...st });
+    if (st)
+      out.push({ tool: "codex", key: `codex:${basename(path)}`, path, ...st });
   };
   const sessions = join(home, "sessions");
   for (const y of list(sessions)) {

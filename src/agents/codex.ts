@@ -115,8 +115,7 @@ export type PatchFile = { path: string; added: number; removed: number };
  */
 export function parsePatch(patch: string, cwd: string): PatchFile[] {
   const files: PatchFile[] = [];
-  const where = (p: string) =>
-    isAbsolute(p) || !cwd ? p : resolve(cwd, p);
+  const where = (p: string) => (isAbsolute(p) || !cwd ? p : resolve(cwd, p));
   let current: PatchFile | null = null;
   for (const raw of patch.split("\n")) {
     const line = raw.replace(/\r$/, "");
