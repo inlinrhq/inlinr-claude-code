@@ -1,187 +1,499 @@
 #!/usr/bin/env node
 
 // src/index.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   appendFileSync,
   closeSync as closeSync2,
-  existsSync,
-  mkdirSync as mkdirSync3,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync4,
   openSync as openSync2,
-  readdirSync,
-  readFileSync as readFileSync3,
+  readdirSync as readdirSync2,
+  readFileSync as readFileSync5,
   readSync,
-  statSync as statSync2
+  statSync as statSync3
 } from "node:fs";
-import { homedir as homedir3, hostname } from "node:os";
-import { basename, dirname as dirname2, join as join3 } from "node:path";
+import { homedir as homedir4, hostname } from "node:os";
+import { basename as basename2, dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
 
-// src/api.ts
-import { dirname } from "node:path";
-async function startDeviceFlow(apiUrl, hostname, platform) {
-  const res = await fetch(`${apiUrl}/api/auth/device`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      client_name: hostname,
-      editor: "claude-code",
-      platform
-    })
-  });
-  if (!res.ok)
-    throw new Error(`could not start activation (HTTP ${res.status})`);
-  return await res.json();
-}
-async function pollDeviceToken(apiUrl, deviceCode) {
-  const res = await fetch(`${apiUrl}/api/auth/device/token`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ device_code: deviceCode })
-  });
-  const body = await res.json().catch(() => ({}));
-  if (res.ok && typeof body.access_token === "string") {
-    return { status: "ok", token: body.access_token };
-  }
-  if (body.error === "authorization_pending")
-    return { status: "pending" };
-  return {
-    status: "denied",
-    error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`
-  };
-}
-var COALESCE_WINDOW_MS = 2 * 60 * 1000;
-function coalesceEdits(edits) {
-  const byBucket = new Map;
-  for (const edit of edits) {
-    const at = Date.parse(edit.timestamp);
-    if (Number.isNaN(at))
+// src/agents/codex.ts
+import { isAbsolute, resolve } from "node:path";
+
+// src/transcript.ts
+var emptyTokens = () => ({
+  input: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  output: 0
+});
+var n = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+function parseTranscript(content, options = {}) {
+  const sinceMs = options.since ? options.since.getTime() : null;
+  let id = "";
+  let cwd = "";
+  let model = "";
+  const tokens = emptyTokens();
+  const edits = [];
+  const activity = [];
+  let firstSeen = null;
+  let lastSeen = null;
+  let carry = options.carry ?? null;
+  const seen = new Map;
+  if (carry)
+    seen.set(carry.id, carry);
+  for (const raw of content.split(`
+`)) {
+    const line = raw.trim();
+    if (!line)
       continue;
-    const bucket = Math.floor(at / COALESCE_WINDOW_MS);
-    const key = `${edit.path}|${bucket}`;
-    const found = byBucket.get(key);
-    if (!found) {
-      byBucket.set(key, { ...edit });
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
       continue;
     }
-    found.linesAdded += edit.linesAdded;
-    found.linesRemoved += edit.linesRemoved;
-    found.lineChanges += edit.lineChanges;
-    if (at > Date.parse(found.timestamp))
-      found.timestamp = edit.timestamp;
-  }
-  return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-}
-function projectOf(repo) {
-  return repo.remote ? { project_git_remote: repo.remote } : { project: repo.project };
-}
-var ACTIVITY_WINDOW_MS = 60 * 1000;
-function toHeartbeats(session, resolve, pluginVersion) {
-  const plugin = `claude-code-inlinr/${pluginVersion}`;
-  const base = {
-    editor: "claude-code",
-    plugin,
-    ai_tool: "claude-code",
-    ai_session: session.id,
-    ...session.model ? { ai_model: session.model } : {}
-  };
-  const edits = coalesceEdits(session.edits).flatMap((edit) => {
-    const repo = resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
-    return repo ? [{ edit, repo }] : [];
-  });
-  const beats = edits.map(({ edit, repo }) => ({
-    ...base,
-    entity: edit.path,
-    type: "file",
-    time: Date.parse(edit.timestamp) / 1000,
-    category: "coding",
-    ...projectOf(repo),
-    ...repo.branch ? { branch: repo.branch } : {},
-    is_write: true,
-    lines_added: edit.linesAdded,
-    lines_deleted: edit.linesRemoved,
-    ai_lines_added: edit.linesAdded,
-    ai_lines_deleted: edit.linesRemoved,
-    ai_line_changes: edit.lineChanges
-  }));
-  const nearestEdit = (at) => {
-    let best = null;
-    let bestGap = Number.POSITIVE_INFINITY;
-    for (const { edit, repo } of edits) {
-      const gap = Math.abs(Date.parse(edit.timestamp) - at);
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = repo;
+    if (entry.isSidechain === true && !options.subagent)
+      continue;
+    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+    if (Number.isNaN(ts))
+      continue;
+    if (typeof entry.sessionId === "string" && entry.sessionId)
+      id = entry.sessionId;
+    if (typeof entry.cwd === "string" && entry.cwd)
+      cwd = entry.cwd;
+    if (sinceMs !== null && ts <= sinceMs)
+      continue;
+    const message = entry.message;
+    const result = entry.toolUseResult;
+    if (!message && !result)
+      continue;
+    if (firstSeen === null || ts < firstSeen)
+      firstSeen = ts;
+    if (lastSeen === null || ts > lastSeen)
+      lastSeen = ts;
+    const at = new Date(ts).toISOString();
+    activity.push({ at, cwd });
+    if (message && typeof message.model === "string" && message.model && !message.model.startsWith("<")) {
+      model = message.model;
+    }
+    const usage = message?.usage ?? entry.usage ?? null;
+    if (usage) {
+      const next = {
+        input: n(usage.input_tokens),
+        cacheRead: n(usage.cache_read_input_tokens),
+        cacheWrite: n(usage.cache_creation_input_tokens),
+        output: n(usage.output_tokens)
+      };
+      const key = typeof message?.id === "string" && message.id ? message.id : "";
+      const before = key && seen.get(key) || emptyTokens();
+      tokens.input += next.input - before.input;
+      tokens.cacheRead += next.cacheRead - before.cacheRead;
+      tokens.cacheWrite += next.cacheWrite - before.cacheWrite;
+      tokens.output += next.output - before.output;
+      if (key)
+        seen.set(key, next);
+      carry = key ? { id: key, ...next } : null;
+    }
+    if (result && typeof result.filePath === "string" && result.filePath) {
+      const patch = Array.isArray(result.structuredPatch) ? result.structuredPatch : [];
+      let added = 0;
+      let removed = 0;
+      for (const hunk of patch) {
+        added += n(hunk.newLines);
+        removed += n(hunk.oldLines);
       }
+      edits.push({
+        path: result.filePath,
+        timestamp: at,
+        lineChanges: added - removed,
+        linesAdded: added,
+        linesRemoved: removed,
+        cwd
+      });
     }
-    return best;
+  }
+  if (!id)
+    return null;
+  return {
+    tool: "claude-code",
+    id,
+    cwd,
+    model,
+    tokens,
+    edits,
+    activity,
+    firstSeen: firstSeen === null ? null : new Date(firstSeen).toISOString(),
+    lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
+    carry
   };
-  const windows = new Map;
-  for (const a of session.activity) {
-    const at = Date.parse(a.at);
-    if (Number.isNaN(at))
-      continue;
-    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
-    if (!repo)
-      continue;
-    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
-    const found = windows.get(key);
-    if (found && found.time * 1000 >= at)
-      continue;
-    windows.set(key, {
-      ...base,
-      entity: "claude-code",
-      type: "app",
-      time: at / 1000,
-      category: "ai-coding",
-      ...projectOf(repo),
-      ...repo.branch ? { branch: repo.branch } : {}
-    });
-  }
-  const activity = [...windows.values()].sort((a, b) => a.time - b.time);
-  beats.push(...activity);
-  const t = session.tokens;
-  const anyTokens = t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
-  const last = activity.at(-1);
-  if (anyTokens && last) {
-    last.ai_input_tokens = t.input;
-    last.ai_output_tokens = t.output;
-    last.ai_cache_read_tokens = t.cacheRead;
-    last.ai_cache_write_tokens = t.cacheWrite;
-  }
-  return beats.sort((a, b) => a.time - b.time);
 }
-var MAX_BATCH = 1000;
-async function sendHeartbeats(apiUrl, token, beats) {
-  let accepted = 0;
-  for (let i = 0;i < beats.length; i += MAX_BATCH) {
-    const chunk = beats.slice(i, i + MAX_BATCH);
-    const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(chunk)
-    });
-    if (!res.ok) {
-      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted, status: res.status });
+function isEmpty(session) {
+  return session.edits.length === 0 && session.activity.length === 0 && session.tokens.input === 0 && session.tokens.output === 0 && session.tokens.cacheRead === 0 && session.tokens.cacheWrite === 0;
+}
+
+// src/agents/codex.ts
+var emptyCodexState = () => ({
+  sessionId: "",
+  cwd: "",
+  model: "",
+  startedAt: null,
+  lastTotal: null,
+  records: false,
+  pending: {}
+});
+var PENDING_TTL_MS = 10 * 60 * 1000;
+var n2 = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+var str = (v) => typeof v === "string" ? v : "";
+function codexTokens(usage) {
+  if (!usage)
+    return emptyTokens();
+  const cacheRead = n2(usage.cached_input_tokens);
+  const cacheWrite = n2(usage.cache_write_input_tokens);
+  return {
+    input: Math.max(0, n2(usage.input_tokens) - cacheRead - cacheWrite),
+    cacheRead,
+    cacheWrite,
+    output: n2(usage.output_tokens)
+  };
+}
+function parsePatch(patch, cwd) {
+  const files = [];
+  const where = (p) => isAbsolute(p) || !cwd ? p : resolve(cwd, p);
+  let current = null;
+  for (const raw of patch.split(`
+`)) {
+    const line = raw.replace(/\r$/, "");
+    const file = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line);
+    if (file) {
+      current = { path: where((file[1] ?? "").trim()), added: 0, removed: 0 };
+      files.push(current);
+      continue;
     }
-    const body = await res.json().catch(() => ({}));
-    accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
+    const move = /^\*\*\* Move to: (.+)$/.exec(line);
+    if (move && current) {
+      current.path = where((move[1] ?? "").trim());
+      continue;
+    }
+    if (line.startsWith("***")) {
+      current = null;
+      continue;
+    }
+    if (!current)
+      continue;
+    if (line.startsWith("+"))
+      current.added++;
+    else if (line.startsWith("-"))
+      current.removed++;
   }
-  return { accepted };
+  return files;
 }
-async function revokeDevice(apiUrl, token) {
-  try {
-    const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` }
-    });
-    return res.ok;
-  } catch {
-    return false;
+function patchOf(payload) {
+  if (payload.name !== "apply_patch")
+    return null;
+  if (payload.type === "custom_tool_call")
+    return str(payload.input) || null;
+  if (payload.type === "function_call") {
+    try {
+      const args = JSON.parse(str(payload.arguments));
+      return str(args.input) || str(args.patch) || null;
+    } catch {
+      return null;
+    }
   }
+  return null;
 }
+function applied(output) {
+  const text = typeof output === "string" ? output : output && typeof output === "object" ? JSON.stringify(output) : "";
+  return /Success\. Updated the following files|Exit code: 0\b|"exit_code":\s*0\b/.test(text);
+}
+function parseCodex(content, options = {}) {
+  const state = {
+    ...emptyCodexState(),
+    ...options.state,
+    pending: { ...options.state?.pending }
+  };
+  const sinceMs = options.since ? options.since.getTime() : null;
+  const tokens = emptyTokens();
+  const edits = [];
+  const activity = [];
+  let firstSeen = null;
+  let lastSeen = null;
+  const add = (t) => {
+    tokens.input += t.input;
+    tokens.cacheRead += t.cacheRead;
+    tokens.cacheWrite += t.cacheWrite;
+    tokens.output += t.output;
+  };
+  const commit = (callId, at) => {
+    const patch = state.pending[callId];
+    delete state.pending[callId];
+    if (!patch)
+      return;
+    for (const f of patch.edits) {
+      edits.push({
+        path: f.path,
+        timestamp: at,
+        lineChanges: f.added - f.removed,
+        linesAdded: f.added,
+        linesRemoved: f.removed,
+        cwd: patch.cwd
+      });
+    }
+  };
+  for (const raw of content.split(`
+`)) {
+    const line = raw.trim();
+    if (!line)
+      continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : null;
+    if (!payload)
+      continue;
+    const ts = Date.parse(str(entry.timestamp));
+    if (Number.isNaN(ts))
+      continue;
+    if (entry.type === "session_meta") {
+      state.sessionId = str(payload.id) || str(payload.session_id);
+      state.cwd = str(payload.cwd) || state.cwd;
+      state.startedAt = str(payload.timestamp) || new Date(ts).toISOString();
+      continue;
+    }
+    if (entry.type === "turn_context") {
+      state.cwd = str(payload.cwd) || state.cwd;
+      state.model = str(payload.model) || state.model;
+      continue;
+    }
+    const started = state.startedAt ? Date.parse(state.startedAt) : Number.NaN;
+    if (!Number.isNaN(started) && ts < started)
+      continue;
+    if (sinceMs !== null && ts <= sinceMs)
+      continue;
+    const at = new Date(ts).toISOString();
+    if (entry.type === "token_usage_record") {
+      state.records = true;
+      add(codexTokens(payload.usage));
+      continue;
+    }
+    if (entry.type === "event_msg") {
+      if (payload.type === "token_count") {
+        if (state.records)
+          continue;
+        const info = payload.info;
+        if (!info)
+          continue;
+        const total = info.total_token_usage?.total_tokens;
+        if (typeof total === "number") {
+          if (total === state.lastTotal)
+            continue;
+          state.lastTotal = total;
+        }
+        add(codexTokens(info.last_token_usage));
+        continue;
+      }
+      if (payload.type === "patch_apply_end") {
+        const id = str(payload.call_id);
+        if (payload.success === true)
+          commit(id, at);
+        else
+          delete state.pending[id];
+      }
+    } else if (entry.type === "response_item") {
+      const patch = patchOf(payload);
+      const callId = str(payload.call_id);
+      if (patch !== null && callId) {
+        state.pending[callId] = {
+          at,
+          cwd: state.cwd,
+          edits: parsePatch(patch, state.cwd)
+        };
+      } else if ((payload.type === "custom_tool_call_output" || payload.type === "function_call_output") && state.pending[callId]) {
+        if (applied(payload.output))
+          commit(callId, at);
+        else
+          delete state.pending[callId];
+      }
+    } else {
+      continue;
+    }
+    if (firstSeen === null || ts < firstSeen)
+      firstSeen = ts;
+    if (lastSeen === null || ts > lastSeen)
+      lastSeen = ts;
+    activity.push({ at, cwd: state.cwd });
+  }
+  const newest = lastSeen ?? Date.now();
+  for (const [id, p] of Object.entries(state.pending)) {
+    if (newest - Date.parse(p.at) > PENDING_TTL_MS)
+      delete state.pending[id];
+  }
+  if (!state.sessionId)
+    return { session: null, state };
+  return {
+    session: {
+      tool: "codex",
+      id: state.sessionId,
+      cwd: state.cwd,
+      model: state.model,
+      tokens,
+      edits,
+      activity,
+      firstSeen: firstSeen === null ? null : new Date(firstSeen).toISOString(),
+      lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
+      carry: null
+    },
+    state
+  };
+}
+// src/agents/gemini.ts
+var KEEP_IDS = 200;
+var emptyGeminiState = () => ({
+  sessionId: "",
+  messages: {},
+  toolCalls: []
+});
+var EDIT_TOOLS = new Set(["write_file", "replace", "edit", "smart_edit"]);
+var n3 = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+var str2 = (v) => typeof v === "string" ? v : "";
+function geminiTokens(t) {
+  if (!t)
+    return emptyTokens();
+  const cacheRead = n3(t.cached);
+  return {
+    input: Math.max(0, n3(t.input) - cacheRead),
+    cacheRead,
+    cacheWrite: 0,
+    output: n3(t.output) + n3(t.thoughts)
+  };
+}
+function parseGemini(content, options = {}) {
+  const prior = options.state ?? emptyGeminiState();
+  const messages = new Map(Object.entries(prior.messages));
+  const toolCalls = new Set(prior.toolCalls);
+  let sessionId = prior.sessionId;
+  let model = "";
+  const cwd = options.root ?? "";
+  const sinceMs = options.since ? options.since.getTime() : null;
+  const tokens = emptyTokens();
+  const edits = [];
+  const activity = [];
+  let firstSeen = null;
+  let lastSeen = null;
+  const seen = (ts) => {
+    if (firstSeen === null || ts < firstSeen)
+      firstSeen = ts;
+    if (lastSeen === null || ts > lastSeen)
+      lastSeen = ts;
+    activity.push({ at: new Date(ts).toISOString(), cwd });
+  };
+  for (const raw of content.split(`
+`)) {
+    const line = raw.trim();
+    if (!line)
+      continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!record || typeof record !== "object")
+      continue;
+    if (typeof record.sessionId === "string" && record.id === undefined) {
+      sessionId = record.sessionId || sessionId;
+      continue;
+    }
+    if (typeof record.id !== "string" || "$patch" in record)
+      continue;
+    const type = record.type;
+    if (type !== "user" && type !== "gemini")
+      continue;
+    const ts = Date.parse(str2(record.timestamp));
+    if (Number.isNaN(ts))
+      continue;
+    const fresh = sinceMs === null || ts > sinceMs;
+    if (fresh && !messages.has(record.id))
+      seen(ts);
+    if (type !== "gemini")
+      continue;
+    if (typeof record.model === "string" && record.model)
+      model = record.model;
+    const next = geminiTokens(record.tokens);
+    const before = messages.get(record.id);
+    if (fresh || before) {
+      const was = before ?? emptyTokens();
+      tokens.input += next.input - was.input;
+      tokens.cacheRead += next.cacheRead - was.cacheRead;
+      tokens.cacheWrite += next.cacheWrite - was.cacheWrite;
+      tokens.output += next.output - was.output;
+      messages.delete(record.id);
+      messages.set(record.id, next);
+    }
+    const calls = Array.isArray(record.toolCalls) ? record.toolCalls : [];
+    for (const call of calls) {
+      const id = str2(call.id);
+      if (!id || toolCalls.has(id) || call.status !== "success")
+        continue;
+      const at = Date.parse(str2(call.timestamp)) || ts;
+      if (sinceMs !== null && at <= sinceMs)
+        continue;
+      toolCalls.add(id);
+      seen(at);
+      if (!EDIT_TOOLS.has(str2(call.name)))
+        continue;
+      const args = call.args ?? {};
+      const path = str2(args.file_path) || str2(args.absolute_path) || str2(args.path);
+      if (!path)
+        continue;
+      const stat = call.resultDisplay?.diffStat ?? null;
+      const added = n3(stat?.model_added_lines);
+      const removed = n3(stat?.model_removed_lines);
+      edits.push({
+        path,
+        timestamp: new Date(at).toISOString(),
+        lineChanges: added - removed,
+        linesAdded: added,
+        linesRemoved: removed,
+        cwd
+      });
+    }
+  }
+  const state = {
+    sessionId,
+    messages: Object.fromEntries([...messages].slice(-KEEP_IDS)),
+    toolCalls: [...toolCalls].slice(-KEEP_IDS)
+  };
+  if (!sessionId)
+    return { session: null, state };
+  return {
+    session: {
+      tool: "gemini-cli",
+      id: sessionId,
+      cwd,
+      model,
+      tokens,
+      edits,
+      activity,
+      firstSeen: firstSeen === null ? null : new Date(firstSeen).toISOString(),
+      lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
+      carry: null
+    },
+    state
+  };
+}
+// src/agents/setup.ts
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync3,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { join as join3 } from "node:path";
 
 // src/config.ts
 import {
@@ -285,6 +597,364 @@ function acquireSyncLock(now = Date.now()) {
   return null;
 }
 
+// src/agents/sources.ts
+import { readdirSync, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename, join as join2 } from "node:path";
+function list(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return [];
+  }
+}
+function stat(path) {
+  try {
+    const st = statSync2(path);
+    return st.isFile() ? { size: st.size, mtime: st.mtime } : null;
+  } catch {
+    return null;
+  }
+}
+function codexHome() {
+  return process.env.CODEX_HOME?.trim() || join2(homedir2(), ".codex");
+}
+var ROLLOUT = /^rollout-.*\.jsonl$/;
+function codexFiles(home = codexHome()) {
+  const out = [];
+  const add = (path) => {
+    const st = stat(path);
+    if (st)
+      out.push({ tool: "codex", key: `codex:${basename(path)}`, path, ...st });
+  };
+  const sessions = join2(home, "sessions");
+  for (const y of list(sessions)) {
+    if (!y.isDirectory() || !/^\d{4}$/.test(y.name))
+      continue;
+    for (const m of list(join2(sessions, y.name))) {
+      if (!m.isDirectory() || !/^\d{2}$/.test(m.name))
+        continue;
+      for (const d of list(join2(sessions, y.name, m.name))) {
+        if (!d.isDirectory() || !/^\d{2}$/.test(d.name))
+          continue;
+        const dir = join2(sessions, y.name, m.name, d.name);
+        for (const f of list(dir)) {
+          if (f.isFile() && ROLLOUT.test(f.name))
+            add(join2(dir, f.name));
+        }
+      }
+    }
+  }
+  const archived = join2(home, "archived_sessions");
+  for (const f of list(archived)) {
+    if (f.isFile() && ROLLOUT.test(f.name))
+      add(join2(archived, f.name));
+  }
+  return out;
+}
+function geminiHome() {
+  return join2(homedir2(), ".gemini");
+}
+function geminiFiles(home = geminiHome()) {
+  const out = [];
+  const tmp = join2(home, "tmp");
+  for (const p of list(tmp)) {
+    if (!p.isDirectory())
+      continue;
+    const chats = join2(tmp, p.name, "chats");
+    const files = list(chats).filter((f) => f.isFile() && /^session-.*\.jsonl$/.test(f.name));
+    if (files.length === 0)
+      continue;
+    let root = "";
+    try {
+      root = readFileSync2(join2(tmp, p.name, ".project_root"), "utf8").trim();
+    } catch {}
+    for (const f of files) {
+      const path = join2(chats, f.name);
+      const st = stat(path);
+      if (st)
+        out.push({
+          tool: "gemini-cli",
+          key: path,
+          path,
+          ...st,
+          ...root ? { root } : {}
+        });
+    }
+  }
+  return out;
+}
+
+// src/agents/setup.ts
+var standalonePath = () => join3(configDir(), "agents.js");
+function bundleVersion(source) {
+  return /VERSION = "(\d+\.\d+\.\d+)"/.exec(source)?.[1] ?? null;
+}
+function older(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0;i < 3; i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0))
+      return (pa[i] ?? 0) < (pb[i] ?? 0);
+  }
+  return false;
+}
+function installStandalone(self) {
+  const target = standalonePath();
+  mkdirSync2(configDir(), { recursive: true });
+  if (self !== target)
+    copyFileSync(self, target);
+  return target;
+}
+function refreshStandalone(self, version) {
+  const target = standalonePath();
+  if (self === target || !existsSync(target))
+    return;
+  const installed = bundleVersion(readFileSync3(target, "utf8"));
+  if (installed && !older(installed, version))
+    return;
+  copyFileSync(self, target);
+}
+function codexNotify(node, script) {
+  const argv = [node, script, "--from", "codex", "--detach"];
+  return `notify = [${argv.map((a) => JSON.stringify(a)).join(", ")}]`;
+}
+function setupCodex(node, script, home = codexHome()) {
+  const path = join3(home, "config.toml");
+  let toml = "";
+  try {
+    toml = readFileSync3(path, "utf8");
+  } catch {}
+  const line = codexNotify(node, script);
+  const existing = /^\s*notify\s*=.*$/m.exec(toml);
+  if (existing) {
+    if (existing[0].includes("--from")) {
+      writeFileSync2(path, toml.replace(existing[0], line), "utf8");
+      return { ok: true, message: `Updated notify in ${path}.` };
+    }
+    return {
+      ok: false,
+      message: `Codex already runs a program after each turn (notify in ${path}), and it takes only one. Run this from that program instead:
+
+     ${JSON.stringify(node)} ${JSON.stringify(script)} --from codex --detach`
+    };
+  }
+  mkdirSync2(home, { recursive: true });
+  writeFileSync2(path, `${line}
+${toml}`, "utf8");
+  return { ok: true, message: `Added notify to ${path}.` };
+}
+var HOOK_NAME = "inlinr";
+function geminiHooks(node, script) {
+  return {
+    hooks: [
+      {
+        name: HOOK_NAME,
+        type: "command",
+        command: `"${node}" "${script}" --from gemini-cli --detach`
+      }
+    ]
+  };
+}
+function setupGemini(node, script, home = geminiHome()) {
+  const path = join3(home, "settings.json");
+  let settings = {};
+  try {
+    settings = JSON.parse(readFileSync3(path, "utf8"));
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      const hooks = {
+        AfterAgent: [geminiHooks(node, script)],
+        SessionEnd: [geminiHooks(node, script)]
+      };
+      return {
+        ok: false,
+        message: `Could not read ${path}. Add this under "hooks" yourself:
+
+${JSON.stringify(hooks, null, 2)}`
+      };
+    }
+  }
+  const hooks = settings.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
+  for (const event of ["AfterAgent", "SessionEnd"]) {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
+    const others = groups.filter((g) => !g.hooks?.some((h) => h.name === HOOK_NAME));
+    hooks[event] = [...others, geminiHooks(node, script)];
+  }
+  settings.hooks = hooks;
+  mkdirSync2(home, { recursive: true });
+  writeFileSync2(path, `${JSON.stringify(settings, null, 2)}
+`, "utf8");
+  return { ok: true, message: `Added the hooks to ${path}.` };
+}
+
+// src/api.ts
+import { dirname } from "node:path";
+async function startDeviceFlow(apiUrl, hostname, platform, editor = "claude-code") {
+  const res = await fetch(`${apiUrl}/api/auth/device`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: hostname,
+      editor,
+      platform
+    })
+  });
+  if (!res.ok)
+    throw new Error(`could not start activation (HTTP ${res.status})`);
+  return await res.json();
+}
+async function pollDeviceToken(apiUrl, deviceCode) {
+  const res = await fetch(`${apiUrl}/api/auth/device/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ device_code: deviceCode })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.ok && typeof body.access_token === "string") {
+    return { status: "ok", token: body.access_token };
+  }
+  if (body.error === "authorization_pending")
+    return { status: "pending" };
+  return {
+    status: "denied",
+    error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`
+  };
+}
+var COALESCE_WINDOW_MS = 2 * 60 * 1000;
+function coalesceEdits(edits) {
+  const byBucket = new Map;
+  for (const edit of edits) {
+    const at = Date.parse(edit.timestamp);
+    if (Number.isNaN(at))
+      continue;
+    const bucket = Math.floor(at / COALESCE_WINDOW_MS);
+    const key = `${edit.path}|${bucket}`;
+    const found = byBucket.get(key);
+    if (!found) {
+      byBucket.set(key, { ...edit });
+      continue;
+    }
+    found.linesAdded += edit.linesAdded;
+    found.linesRemoved += edit.linesRemoved;
+    found.lineChanges += edit.lineChanges;
+    if (at > Date.parse(found.timestamp))
+      found.timestamp = edit.timestamp;
+  }
+  return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+function projectOf(repo) {
+  return repo.remote ? { project_git_remote: repo.remote } : { project: repo.project };
+}
+var ACTIVITY_WINDOW_MS = 60 * 1000;
+function toHeartbeats(session, resolve, pluginVersion) {
+  const plugin = `claude-code-inlinr/${pluginVersion}`;
+  const base = {
+    editor: session.tool,
+    plugin,
+    ai_tool: session.tool,
+    ai_session: session.id,
+    ...session.model ? { ai_model: session.model } : {}
+  };
+  const edits = coalesceEdits(session.edits).flatMap((edit) => {
+    const repo = resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    return repo ? [{ edit, repo }] : [];
+  });
+  const beats = edits.map(({ edit, repo }) => ({
+    ...base,
+    entity: edit.path,
+    type: "file",
+    time: Date.parse(edit.timestamp) / 1000,
+    category: "coding",
+    ...projectOf(repo),
+    ...repo.branch ? { branch: repo.branch } : {},
+    is_write: true,
+    lines_added: edit.linesAdded,
+    lines_deleted: edit.linesRemoved,
+    ai_lines_added: edit.linesAdded,
+    ai_lines_deleted: edit.linesRemoved,
+    ai_line_changes: edit.lineChanges
+  }));
+  const nearestEdit = (at) => {
+    let best = null;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const { edit, repo } of edits) {
+      const gap = Math.abs(Date.parse(edit.timestamp) - at);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = repo;
+      }
+    }
+    return best;
+  };
+  const windows = new Map;
+  for (const a of session.activity) {
+    const at = Date.parse(a.at);
+    if (Number.isNaN(at))
+      continue;
+    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    if (!repo)
+      continue;
+    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+    const found = windows.get(key);
+    if (found && found.time * 1000 >= at)
+      continue;
+    windows.set(key, {
+      ...base,
+      entity: session.tool,
+      type: "app",
+      time: at / 1000,
+      category: "ai-coding",
+      ...projectOf(repo),
+      ...repo.branch ? { branch: repo.branch } : {}
+    });
+  }
+  const activity = [...windows.values()].sort((a, b) => a.time - b.time);
+  beats.push(...activity);
+  const t = session.tokens;
+  const anyTokens = t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
+  const last = activity.at(-1);
+  if (anyTokens && last) {
+    last.ai_input_tokens = t.input;
+    last.ai_output_tokens = t.output;
+    last.ai_cache_read_tokens = t.cacheRead;
+    last.ai_cache_write_tokens = t.cacheWrite;
+  }
+  return beats.sort((a, b) => a.time - b.time);
+}
+var MAX_BATCH = 1000;
+async function sendHeartbeats(apiUrl, token, beats) {
+  let accepted = 0;
+  for (let i = 0;i < beats.length; i += MAX_BATCH) {
+    const chunk = beats.slice(i, i + MAX_BATCH);
+    const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(chunk)
+    });
+    if (!res.ok) {
+      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted, status: res.status });
+    }
+    const body = await res.json().catch(() => ({}));
+    accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
+  }
+  return { accepted };
+}
+async function revokeDevice(apiUrl, token) {
+  try {
+    const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // src/notice.ts
 function sessionNotice(connected, lastLogLine, now = Date.now()) {
   if (!connected) {
@@ -308,9 +978,9 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
 }
 
 // src/report.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
 var RESEND_AFTER_MS = 24 * 60 * 60 * 1000;
 var FORGET_AFTER_MS = 7 * RESEND_AFTER_MS;
 var TIMEOUT_MS = 3000;
@@ -335,7 +1005,7 @@ function isServersOrNetworks(err) {
   const code = err.code;
   return typeof code === "string" && /^(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_)/.test(code);
 }
-function scrubHome(text, home = homedir2()) {
+function scrubHome(text, home = homedir3()) {
   if (home.length < 3)
     return text;
   return text.split(home).join("~").split(home.replace(/\\/g, "/")).join("~");
@@ -346,7 +1016,7 @@ ${message.replace(/\d{4,}/g, "#")}`;
 }
 function readSent(path) {
   try {
-    const raw = JSON.parse(readFileSync2(path, "utf8"));
+    const raw = JSON.parse(readFileSync4(path, "utf8"));
     return raw && typeof raw === "object" ? raw : {};
   } catch {
     return {};
@@ -370,8 +1040,8 @@ async function reportError(context, err, opts) {
         delete sent[k];
     }
     try {
-      mkdirSync2(join2(opts.statePath, ".."), { recursive: true });
-      writeFileSync2(opts.statePath, JSON.stringify(sent), { mode: 384 });
+      mkdirSync3(join4(opts.statePath, ".."), { recursive: true });
+      writeFileSync3(opts.statePath, JSON.stringify(sent), { mode: 384 });
     } catch {}
     const body = JSON.stringify({
       source: "claude-code",
@@ -392,122 +1062,11 @@ async function reportError(context, err, opts) {
   } catch {}
 }
 
-// src/transcript.ts
-var emptyTokens = () => ({
-  input: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  output: 0
-});
-var n = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
-function parseTranscript(content, options = {}) {
-  const sinceMs = options.since ? options.since.getTime() : null;
-  let id = "";
-  let cwd = "";
-  let model = "";
-  const tokens = emptyTokens();
-  const edits = [];
-  const activity = [];
-  let firstSeen = null;
-  let lastSeen = null;
-  let carry = options.carry ?? null;
-  const seen = new Map;
-  if (carry)
-    seen.set(carry.id, carry);
-  for (const raw of content.split(`
-`)) {
-    const line = raw.trim();
-    if (!line)
-      continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.isSidechain === true && !options.subagent)
-      continue;
-    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-    if (Number.isNaN(ts))
-      continue;
-    if (typeof entry.sessionId === "string" && entry.sessionId)
-      id = entry.sessionId;
-    if (typeof entry.cwd === "string" && entry.cwd)
-      cwd = entry.cwd;
-    if (sinceMs !== null && ts <= sinceMs)
-      continue;
-    const message = entry.message;
-    const result = entry.toolUseResult;
-    if (!message && !result)
-      continue;
-    if (firstSeen === null || ts < firstSeen)
-      firstSeen = ts;
-    if (lastSeen === null || ts > lastSeen)
-      lastSeen = ts;
-    const at = new Date(ts).toISOString();
-    activity.push({ at, cwd });
-    if (message && typeof message.model === "string" && message.model && !message.model.startsWith("<")) {
-      model = message.model;
-    }
-    const usage = message?.usage ?? entry.usage ?? null;
-    if (usage) {
-      const next = {
-        input: n(usage.input_tokens),
-        cacheRead: n(usage.cache_read_input_tokens),
-        cacheWrite: n(usage.cache_creation_input_tokens),
-        output: n(usage.output_tokens)
-      };
-      const key = typeof message?.id === "string" && message.id ? message.id : "";
-      const before = key && seen.get(key) || emptyTokens();
-      tokens.input += next.input - before.input;
-      tokens.cacheRead += next.cacheRead - before.cacheRead;
-      tokens.cacheWrite += next.cacheWrite - before.cacheWrite;
-      tokens.output += next.output - before.output;
-      if (key)
-        seen.set(key, next);
-      carry = key ? { id: key, ...next } : null;
-    }
-    if (result && typeof result.filePath === "string" && result.filePath) {
-      const patch = Array.isArray(result.structuredPatch) ? result.structuredPatch : [];
-      let added = 0;
-      let removed = 0;
-      for (const hunk of patch) {
-        added += n(hunk.newLines);
-        removed += n(hunk.oldLines);
-      }
-      edits.push({
-        path: result.filePath,
-        timestamp: at,
-        lineChanges: added - removed,
-        linesAdded: added,
-        linesRemoved: removed,
-        cwd
-      });
-    }
-  }
-  if (!id)
-    return null;
-  return {
-    id,
-    cwd,
-    model,
-    tokens,
-    edits,
-    activity,
-    firstSeen: firstSeen === null ? null : new Date(firstSeen).toISOString(),
-    lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
-    carry
-  };
-}
-function isEmpty(session) {
-  return session.edits.length === 0 && session.activity.length === 0 && session.tokens.input === 0 && session.tokens.output === 0 && session.tokens.cacheRead === 0 && session.tokens.cacheWrite === 0;
-}
-
 // src/index.ts
-var VERSION = "0.5.1";
+var VERSION = "0.6.0";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join3(override || join3(homedir3(), ".claude"), "projects");
+  return join5(override || join5(homedir4(), ".claude"), "projects");
 }
 function transcripts() {
   const root = claudeProjectsDir();
@@ -515,12 +1074,12 @@ function transcripts() {
   const walk = (dir, subagent) => {
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
+      entries = readdirSync2(dir, { withFileTypes: true, encoding: "utf8" });
     } catch {
       return;
     }
     for (const e of entries) {
-      const full = join3(dir, e.name);
+      const full = join5(dir, e.name);
       if (e.isDirectory()) {
         if (e.name === "tool-results")
           continue;
@@ -530,13 +1089,23 @@ function transcripts() {
       if (!e.name.endsWith(".jsonl"))
         continue;
       try {
-        const st = statSync2(full);
-        out.push({ path: full, size: st.size, mtime: st.mtime, subagent });
+        const st = statSync3(full);
+        out.push({
+          tool: "claude-code",
+          key: full,
+          path: full,
+          size: st.size,
+          mtime: st.mtime,
+          subagent
+        });
       } catch {}
     }
   };
   walk(root, false);
   return out;
+}
+function sessionFiles() {
+  return [...transcripts(), ...codexFiles(), ...geminiFiles()];
 }
 function readFrom(path, offset, size) {
   const length = size - offset;
@@ -582,7 +1151,7 @@ function repoResolver() {
     if (!root)
       return null;
     const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
-    const project = remote ? undefined : basename(root);
+    const project = remote ? undefined : basename2(root);
     if (!remote && !project)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -590,7 +1159,7 @@ function repoResolver() {
   };
   return (dir) => {
     let d = dir;
-    while (d && !existsSync(d)) {
+    while (d && !existsSync2(d)) {
       const up = dirname2(d);
       if (up === d)
         return null;
@@ -612,8 +1181,8 @@ function openBrowser(url) {
     execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
   } catch {}
 }
-async function activate(config, cloud = false) {
-  const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform);
+async function activate(config, cloud = false, editor = "claude-code") {
+  const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform, editor);
   openBrowser(init.verification_uri_complete);
   console.log("");
   console.log(cloud ? "  Approve Claude Code cloud in the browser tab that just opened." : "  Approve this machine in the browser tab that just opened.");
@@ -697,8 +1266,9 @@ function printCloudSetup(deviceToken) {
   console.log("  Remove the device from Settings on inlinr.com to revoke it.");
 }
 async function status(config) {
-  const all = transcripts();
+  const all = sessionFiles();
   const pending = all.filter((t) => hasNew(config, t)).length;
+  const count = (tool) => all.filter((t) => t.tool === tool).length;
   const connected = token(config) ? config.deviceToken ? "connected" : "connected (INLINR_TOKEN)" : "not connected — run /inlinr:activate";
   console.log("");
   console.log(`  Plugin      ${VERSION}`);
@@ -707,13 +1277,14 @@ async function status(config) {
   console.log(`  Server      ${config.apiUrl}`);
   console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
   console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
+  console.log(`              Claude Code ${count("claude-code")}, Codex ${count("codex")}, Gemini CLI ${count("gemini-cli")}`);
   if (token(config) && all.length === 0) {
     console.log("");
     console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
     console.log("  so this is expected on a machine where you have not used it yet.");
   }
-  const log = join3(configDir(), "claude-code.log");
-  if (existsSync(log)) {
+  const log = join5(configDir(), "claude-code.log");
+  if (existsSync2(log)) {
     console.log("");
     console.log(`  Errors have been logged to ${log}`);
   }
@@ -722,7 +1293,7 @@ async function status(config) {
 }
 function lastLogLine() {
   try {
-    const lines = readFileSync3(join3(configDir(), "claude-code.log"), "utf8").trim().split(`
+    const lines = readFileSync5(join5(configDir(), "claude-code.log"), "utf8").trim().split(`
 `);
     return lines[lines.length - 1] || null;
   } catch {
@@ -760,7 +1331,7 @@ async function deactivate(config) {
   return 0;
 }
 function hasNew(config, t) {
-  const state = config.files[t.path];
+  const state = config.files[t.key];
   if (state)
     return t.size !== state.offset;
   const since = config.lastParsedAt ? Date.parse(config.lastParsedAt) : Number.NaN;
@@ -785,15 +1356,15 @@ async function sync(config, throttleSeconds) {
       return 0;
   }
   const since = new Date(config.lastParsedAt);
-  const all = transcripts();
+  const all = sessionFiles();
   const files = {};
   const beats = [];
   const resolve = repoResolver();
   for (const t of all) {
-    const state = config.files[t.path];
+    const state = config.files[t.key];
     if (!hasNew(config, t)) {
       if (state)
-        files[t.path] = state;
+        files[t.key] = state;
       continue;
     }
     const offset = state && state.offset <= t.size ? state.offset : 0;
@@ -802,18 +1373,38 @@ async function sync(config, throttleSeconds) {
       chunk = readFrom(t.path, offset, t.size);
     } catch {
       if (state)
-        files[t.path] = state;
+        files[t.key] = state;
       continue;
     }
-    const session = parseTranscript(chunk.text, {
-      since: state ? null : since,
-      carry: state && offset > 0 ? state.carry : null,
-      subagent: t.subagent
-    });
-    files[t.path] = {
-      offset: chunk.end,
-      carry: session?.carry ?? state?.carry ?? null
-    };
+    const floor = state ? null : since;
+    const resumed = state && offset > 0 ? state : null;
+    let session;
+    if (t.tool === "codex") {
+      const read = parseCodex(chunk.text, {
+        since: floor,
+        state: resumed?.agent ?? emptyCodexState()
+      });
+      session = read.session;
+      files[t.key] = { offset: chunk.end, agent: read.state };
+    } else if (t.tool === "gemini-cli") {
+      const read = parseGemini(chunk.text, {
+        since: floor,
+        state: resumed?.agent ?? emptyGeminiState(),
+        root: t.root
+      });
+      session = read.session;
+      files[t.key] = { offset: chunk.end, agent: read.state };
+    } else {
+      session = parseTranscript(chunk.text, {
+        since: floor,
+        carry: resumed?.carry ?? null,
+        subagent: t.subagent
+      });
+      files[t.key] = {
+        offset: chunk.end,
+        carry: session?.carry ?? state?.carry ?? null
+      };
+    }
     if (!session || isEmpty(session))
       continue;
     beats.push(...toHeartbeats(session, resolve, VERSION));
@@ -828,11 +1419,36 @@ async function sync(config, throttleSeconds) {
   });
   return 0;
 }
+var self = () => resolve2(process.argv[1] ?? "");
+function setup(tool) {
+  if (tool !== "codex" && tool !== "gemini-cli") {
+    console.error("  Usage: setup codex | setup gemini-cli");
+    return 2;
+  }
+  const script = installStandalone(self());
+  const result = tool === "codex" ? setupCodex(process.execPath, script) : setupGemini(process.execPath, script);
+  console.log("");
+  console.log(`  ${result.message}`);
+  if (result.ok) {
+    console.log(`  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to Inlinr after each turn.`);
+  }
+  console.log("");
+  return result.ok ? 0 : 1;
+}
 async function main() {
   const args = process.argv.slice(2);
   const config = load();
-  if (args[0] === "activate")
-    return activate(config, args[1] === "--cloud");
+  if (args[0] === "activate") {
+    const e = args.indexOf("--editor");
+    const editor = e >= 0 ? args[e + 1] : "claude-code";
+    if (editor !== "claude-code" && editor !== "codex" && editor !== "gemini-cli") {
+      console.error("  --editor takes claude-code, codex or gemini-cli.");
+      return 2;
+    }
+    return activate(config, args[1] === "--cloud", editor);
+  }
+  if (args[0] === "setup")
+    return setup(args[1]);
   if (args[0] === "deactivate")
     return deactivate(config);
   if (args[0] === "status")
@@ -842,6 +1458,17 @@ async function main() {
   if (args[0] === "--version") {
     console.log(VERSION);
     return 0;
+  }
+  if (args.includes("--detach")) {
+    spawn(process.execPath, [self(), ...args.filter((a) => a !== "--detach")], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    if (args.includes("gemini-cli"))
+      console.log("{}");
+    return 0;
+  }
+  if (process.env.CLAUDE_PLUGIN_ROOT) {
+    try {
+      refreshStandalone(self(), VERSION);
+    } catch {}
   }
   const i = args.indexOf("--throttle");
   const throttle = i >= 0 ? Number(args[i + 1] ?? 0) : 0;
@@ -858,26 +1485,26 @@ function logFailure(err) {
   try {
     const line = `${new Date().toISOString()} ${err?.message ?? String(err)}
 `;
-    mkdirSync3(configDir(), { recursive: true });
-    appendFileSync(join3(configDir(), "claude-code.log"), line, "utf8");
+    mkdirSync4(configDir(), { recursive: true });
+    appendFileSync(join5(configDir(), "claude-code.log"), line, "utf8");
   } catch {}
 }
 async function reportFailure(err) {
   let configToml = null;
   try {
-    configToml = readFileSync3(join3(configDir(), "config.toml"), "utf8");
+    configToml = readFileSync5(join5(configDir(), "config.toml"), "utf8");
   } catch {}
   await reportError("sync", err, {
     apiUrl: load().apiUrl,
     version: VERSION,
     enabled: reportsEnabled(process.env, configToml),
-    statePath: join3(configDir(), "error-reports-claude-code.json")
+    statePath: join5(configDir(), "error-reports-claude-code.json")
   });
 }
-var INTERACTIVE = new Set(["activate", "deactivate", "status"]);
+var INTERACTIVE = new Set(["activate", "deactivate", "status", "setup"]);
 main().then((code) => process.exit(code)).catch(async (err) => {
   logFailure(err);
-  if (process.argv[2] === "activate" || process.argv[2] === "deactivate") {
+  if (process.argv[2] === "activate" || process.argv[2] === "deactivate" || process.argv[2] === "setup") {
     console.error(`  ${err.message}`);
     process.exit(1);
   }

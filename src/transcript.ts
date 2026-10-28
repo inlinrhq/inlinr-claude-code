@@ -66,7 +66,15 @@ export type Activity = {
  */
 export type Carry = { id: string } & Tokens;
 
+/**
+ * The assistant a session belongs to, as the wire enum spells it. It is both
+ * the beat's `ai_tool` and its `editor`: the assistant is where the time was
+ * spent.
+ */
+export type AiTool = "claude-code" | "codex" | "gemini-cli";
+
 export type Session = {
+  tool: AiTool;
   id: string;
   /** The newest working directory seen. */
   cwd: string;
@@ -246,6 +254,7 @@ export function parseTranscript(
   if (!id) return null;
 
   return {
+    tool: "claude-code",
     id,
     cwd,
     model,

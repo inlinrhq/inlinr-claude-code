@@ -40,6 +40,7 @@ const resolve = (dir: string): Repo | null => {
 };
 
 const session = (over: Partial<Session> = {}): Session => ({
+  tool: "claude-code",
   id: "s1",
   cwd: "/repo",
   model: "claude-opus-5",
