@@ -187,7 +187,15 @@ export function parseTranscript(
     const at = new Date(ts).toISOString();
     activity.push({ at, cwd });
 
-    if (message && typeof message.model === "string" && message.model) {
+    // Claude Code writes `<synthetic>` for messages it makes up itself (an
+    // API error, an interrupted turn): no model wrote them, so the last real
+    // one stays.
+    if (
+      message &&
+      typeof message.model === "string" &&
+      message.model &&
+      !message.model.startsWith("<")
+    ) {
       model = message.model;
     }
 
