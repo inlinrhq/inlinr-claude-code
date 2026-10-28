@@ -27,6 +27,19 @@ describe("parseTranscript", () => {
     expect(s?.model).toBe("claude-opus-5");
   });
 
+  test("keeps the last real model past a synthetic message", () => {
+    const content = [
+      usageLine("m1", "2026-08-01T10:00:00Z", { output_tokens: 10 }),
+      line({
+        timestamp: "2026-08-01T10:00:05Z",
+        sessionId: "s1",
+        cwd: "/repo",
+        message: { id: "m2", role: "assistant", model: "<synthetic>" },
+      }),
+    ].join("\n");
+    expect(parseTranscript(content)?.model).toBe("claude-opus-5");
+  });
+
   test("supersedes a streaming message instead of adding it up", () => {
     // This is the one that silently multiplies a response's cost by the
     // number of chunks if it is wrong.

@@ -432,7 +432,7 @@ function parseTranscript(content, options = {}) {
       lastSeen = ts;
     const at = new Date(ts).toISOString();
     activity.push({ at, cwd });
-    if (message && typeof message.model === "string" && message.model) {
+    if (message && typeof message.model === "string" && message.model && !message.model.startsWith("<")) {
       model = message.model;
     }
     const usage = message?.usage ?? entry.usage ?? null;
@@ -490,7 +490,7 @@ function isEmpty(session) {
 }
 
 // src/index.ts
-var VERSION = "0.5.0";
+var VERSION = "0.5.1";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join3(override || join3(homedir3(), ".claude"), "projects");
