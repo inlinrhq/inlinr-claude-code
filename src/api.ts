@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import type { Session } from "./transcript";
+import type { AiTool, Session } from "./transcript";
 
 /**
  * The two things this plugin needs from the server: a device token, and
@@ -31,13 +31,14 @@ export async function startDeviceFlow(
   apiUrl: string,
   hostname: string,
   platform: string,
+  editor: AiTool = "claude-code",
 ): Promise<DeviceInit> {
   const res = await fetch(`${apiUrl}/api/auth/device`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       client_name: hostname,
-      editor: "claude-code",
+      editor,
       platform,
     }),
   });
@@ -140,7 +141,7 @@ export type Heartbeat = {
   ai_lines_added?: number;
   ai_lines_deleted?: number;
   ai_line_changes?: number;
-  ai_tool: "claude-code";
+  ai_tool: AiTool;
   ai_session?: string;
   ai_model?: string;
   ai_input_tokens?: number;
@@ -207,9 +208,9 @@ export function toHeartbeats(
 ): Heartbeat[] {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
   const base = {
-    editor: "claude-code",
+    editor: session.tool,
     plugin,
-    ai_tool: "claude-code" as const,
+    ai_tool: session.tool,
     ai_session: session.id,
     ...(session.model ? { ai_model: session.model } : {}),
   };
@@ -264,7 +265,7 @@ export function toHeartbeats(
     if (found && found.time * 1000 >= at) continue;
     windows.set(key, {
       ...base,
-      entity: "claude-code",
+      entity: session.tool,
       type: "app",
       time: at / 1000,
       category: "ai-coding",

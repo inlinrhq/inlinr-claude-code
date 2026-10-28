@@ -25,6 +25,8 @@ export type FileState = {
   /** Bytes already turned into heartbeats. Always at a line boundary. */
   offset: number;
   carry?: Carry | null;
+  /** What Codex or Gemini CLI's parser carries from one read to the next. */
+  agent?: unknown;
 };
 
 export type Config = {

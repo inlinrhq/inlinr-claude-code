@@ -5,10 +5,12 @@
 > après chaque modification.
 
 Claude Code plugin for Inlinr. Reads Claude Code's own transcripts
-(`~/.claude/projects/**/*.jsonl`, subagents included), turns them into
-heartbeats with tokens and AI-written lines, and posts them to
-`https://inlinr.com/api/v1/heartbeats` itself. Node only: no binary, it does
-not use `inlinr-cli`.
+(`~/.claude/projects/**/*.jsonl`, subagents included), and the session files
+of Codex (`~/.codex/sessions/`) and Gemini CLI (`~/.gemini/tmp/*/chats/`) on
+the same machine, turns them into heartbeats with tokens and AI-written
+lines, and posts them to `https://inlinr.com/api/v1/heartbeats` itself. Node
+only: no binary, it does not use `inlinr-cli`. This repository is where every
+assistant's parser lives (inlinr-cli's CLAUDE.md says the same).
 
 Sibling repos:
 - `inlinrhq/inlinr-web` — server. Source of truth for the wire contract below.
@@ -26,6 +28,10 @@ hooks/hooks.json                 # when Claude Code runs us (see below)
 skills/{activate,status,deactivate,cloud}/SKILL.md   # the /inlinr:* commands
 src/index.ts      # entry: subcommands, transcript walk, sync, VERSION
 src/transcript.ts # JSONL parser: edits, lines, tokens, sessions, carry-over
+src/agents/codex.ts   # Codex rollouts: apply_patch edits, token_count / token_usage_record
+src/agents/gemini.ts  # Gemini CLI sessions: messages rewritten by id, diffStat lines
+src/agents/sources.ts # where each assistant's files are, and their state keys
+src/agents/setup.ts   # `setup codex|gemini-cli`: the hook for a machine without Claude Code
 src/api.ts        # device flow, heartbeat batches, revoke
 src/config.ts     # ~/.inlinr/claude-code.json (token, read positions)
 src/notice.ts     # what SessionStart tells Claude when the machine is not connected
@@ -52,6 +58,12 @@ dist/index.js     # the committed bundle Claude Code actually runs
   repository's `main` and runs it only when `CLAUDE_CODE_REMOTE=true`, with
   the token from `INLINR_TOKEN`. **So `main`'s `dist/` is live the moment it
   merges.**
+- Codex and Gemini CLI files are read by the same sync, with their own
+  state in `files` (`agent`). A Codex file is keyed by its name, not its
+  path: archiving moves it. Without Claude Code, `setup` copies the bundle
+  to `~/.inlinr/agents.js` and adds Codex's `notify` or Gemini CLI's
+  `AfterAgent` / `SessionEnd` hooks; `--detach` returns at once (Gemini CLI
+  waits for its hooks) and the plugin refreshes that copy when it is newer.
 - Work outside any git repository is skipped (no project to put it in; it
   is often the parent folder of several). A repository with no remote is
   sent as `project`, its folder's name (needs inlinr-web with `project`).
@@ -88,8 +100,8 @@ bun run build
   `POST /api/auth/device/token`; revoke with `POST /api/auth/device/revoke`.
   The token is `in_d_…`, sent as `Authorization: Bearer`.
 - Beats: `POST /api/v1/heartbeats`, up to 1000 per request, the wire format in
-  inlinr-cli's CLAUDE.md. This plugin sends `editor: "claude-code"`,
-  `ai_tool: "claude-code"`, `category` `coding` (an edit) or `ai-coding`
+  inlinr-cli's CLAUDE.md. This plugin sends `editor` and `ai_tool` both set
+  to the assistant (`claude-code`, `codex` or `gemini-cli`), `category` `coding` (an edit) or `ai-coding`
   (activity), `ai_session`, `ai_model`, the four token fields (uncached input,
   cache read, cache write, output) and line counts. It sends no `language`:
   the server infers it.

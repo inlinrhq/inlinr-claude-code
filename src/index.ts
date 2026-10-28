@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   appendFileSync,
   closeSync,
@@ -13,7 +13,22 @@ import {
   statSync,
 } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  type CodexState,
+  emptyCodexState,
+  emptyGeminiState,
+  type GeminiState,
+  parseCodex,
+  parseGemini,
+} from "./agents";
+import {
+  installStandalone,
+  refreshStandalone,
+  setupCodex,
+  setupGemini,
+} from "./agents/setup";
+import { codexFiles, geminiFiles, type SessionFile } from "./agents/sources";
 import {
   pollDeviceToken,
   type Repo,
@@ -33,7 +48,12 @@ import {
 } from "./config";
 import { sessionNotice } from "./notice";
 import { reportError, reportsEnabled } from "./report";
-import { isEmpty, parseTranscript } from "./transcript";
+import {
+  type AiTool,
+  isEmpty,
+  parseTranscript,
+  type Session,
+} from "./transcript";
 
 /**
  * The whole plugin, with no binary to install.
@@ -48,7 +68,7 @@ import { isEmpty, parseTranscript } from "./transcript";
  * Node programs. It is no longer a prerequisite for this one.
  */
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 
 function claudeProjectsDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
@@ -65,16 +85,9 @@ function claudeProjectsDir(): string {
  * and nowhere else, so skipping them dropped everything a subagent did: its
  * time, its tokens, its edits.
  */
-type Transcript = {
-  path: string;
-  size: number;
-  mtime: Date;
-  subagent: boolean;
-};
-
-function transcripts(): Transcript[] {
+function transcripts(): SessionFile[] {
   const root = claudeProjectsDir();
-  const out: Transcript[] = [];
+  const out: SessionFile[] = [];
 
   const walk = (dir: string, subagent: boolean) => {
     let entries: Dirent[];
@@ -94,7 +107,14 @@ function transcripts(): Transcript[] {
       if (!e.name.endsWith(".jsonl")) continue;
       try {
         const st = statSync(full);
-        out.push({ path: full, size: st.size, mtime: st.mtime, subagent });
+        out.push({
+          tool: "claude-code",
+          key: full,
+          path: full,
+          size: st.size,
+          mtime: st.mtime,
+          subagent,
+        });
       } catch {
         // Gone between the listing and the stat.
       }
@@ -103,6 +123,15 @@ function transcripts(): Transcript[] {
 
   walk(root, false);
   return out;
+}
+
+/**
+ * Every session file this plugin reads: Claude Code's, and those of Codex
+ * and Gemini CLI on the same machine. Someone who uses two assistants gets
+ * both tracked by the one sync.
+ */
+function sessionFiles(): SessionFile[] {
+  return [...transcripts(), ...codexFiles(), ...geminiFiles()];
 }
 
 /**
@@ -222,11 +251,16 @@ function openBrowser(url: string): void {
  * disk is gone by the next session — it has to live in the environment's
  * settings, and the user has to see it to paste it there.
  */
-async function activate(config: Config, cloud = false): Promise<number> {
+async function activate(
+  config: Config,
+  cloud = false,
+  editor: AiTool = "claude-code",
+): Promise<number> {
   const init = await startDeviceFlow(
     config.apiUrl,
     cloud ? "Claude Code cloud" : hostname(),
     cloud ? "linux" : process.platform,
+    editor,
   );
 
   // Opened before anything is printed. The link already carries the code, so
@@ -375,8 +409,9 @@ function printCloudSetup(deviceToken: string): void {
  * and how many transcripts are in scope.
  */
 async function status(config: Config): Promise<number> {
-  const all = transcripts();
+  const all = sessionFiles();
   const pending = all.filter((t) => hasNew(config, t)).length;
+  const count = (tool: AiTool) => all.filter((t) => t.tool === tool).length;
   const connected = token(config)
     ? config.deviceToken
       ? "connected"
@@ -393,6 +428,9 @@ async function status(config: Config): Promise<number> {
   );
   console.log(
     `  Transcripts ${all.length} found, ${pending} with something new`,
+  );
+  console.log(
+    `              Claude Code ${count("claude-code")}, Codex ${count("codex")}, Gemini CLI ${count("gemini-cli")}`,
   );
 
   if (token(config) && all.length === 0) {
@@ -470,8 +508,8 @@ async function deactivate(config: Config): Promise<number> {
 }
 
 /** Has this transcript grown since it was last read? */
-function hasNew(config: Config, t: Transcript): boolean {
-  const state = config.files[t.path];
+function hasNew(config: Config, t: SessionFile): boolean {
+  const state = config.files[t.key];
   if (state) return t.size !== state.offset;
   // Never read: only worth opening if it was written after tracking began.
   const since = config.lastParsedAt
@@ -506,17 +544,17 @@ async function sync(config: Config, throttleSeconds: number): Promise<number> {
   }
 
   const since = new Date(config.lastParsedAt);
-  const all = transcripts();
+  const all = sessionFiles();
   const files: Config["files"] = {};
   const beats = [];
   const resolve = repoResolver();
 
   for (const t of all) {
-    const state = config.files[t.path];
+    const state = config.files[t.key];
     if (!hasNew(config, t)) {
       // Kept only while the file exists, so the map does not grow with
       // every session ever deleted.
-      if (state) files[t.path] = state;
+      if (state) files[t.key] = state;
       continue;
     }
 
@@ -526,21 +564,42 @@ async function sync(config: Config, throttleSeconds: number): Promise<number> {
     try {
       chunk = readFrom(t.path, offset, t.size);
     } catch {
-      if (state) files[t.path] = state;
+      if (state) files[t.key] = state;
       continue;
     }
 
-    const session = parseTranscript(chunk.text, {
-      // Only a file read for the first time needs the floor; a known one
-      // resumes exactly where it stopped.
-      since: state ? null : since,
-      carry: state && offset > 0 ? state.carry : null,
-      subagent: t.subagent,
-    });
-    files[t.path] = {
-      offset: chunk.end,
-      carry: session?.carry ?? state?.carry ?? null,
-    };
+    // Only a file read for the first time needs the floor; a known one
+    // resumes exactly where it stopped.
+    const floor = state ? null : since;
+    const resumed = state && offset > 0 ? state : null;
+    let session: Session | null;
+    if (t.tool === "codex") {
+      const read = parseCodex(chunk.text, {
+        since: floor,
+        state: (resumed?.agent as CodexState | undefined) ?? emptyCodexState(),
+      });
+      session = read.session;
+      files[t.key] = { offset: chunk.end, agent: read.state };
+    } else if (t.tool === "gemini-cli") {
+      const read = parseGemini(chunk.text, {
+        since: floor,
+        state:
+          (resumed?.agent as GeminiState | undefined) ?? emptyGeminiState(),
+        root: t.root,
+      });
+      session = read.session;
+      files[t.key] = { offset: chunk.end, agent: read.state };
+    } else {
+      session = parseTranscript(chunk.text, {
+        since: floor,
+        carry: resumed?.carry ?? null,
+        subagent: t.subagent,
+      });
+      files[t.key] = {
+        offset: chunk.end,
+        carry: session?.carry ?? state?.carry ?? null,
+      };
+    }
     if (!session || isEmpty(session)) continue;
 
     beats.push(...toHeartbeats(session, resolve, VERSION));
@@ -560,17 +619,81 @@ async function sync(config: Config, throttleSeconds: number): Promise<number> {
   return 0;
 }
 
+/** The path of this script. */
+const self = () => resolve(process.argv[1] ?? "");
+
+/**
+ * `setup codex` / `setup gemini-cli`: run the sync from that assistant's own
+ * hook, for a machine without Claude Code. See agents/setup.ts.
+ */
+function setup(tool: string | undefined): number {
+  if (tool !== "codex" && tool !== "gemini-cli") {
+    console.error("  Usage: setup codex | setup gemini-cli");
+    return 2;
+  }
+  const script = installStandalone(self());
+  const result =
+    tool === "codex"
+      ? setupCodex(process.execPath, script)
+      : setupGemini(process.execPath, script);
+  console.log("");
+  console.log(`  ${result.message}`);
+  if (result.ok) {
+    console.log(
+      `  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to Inlinr after each turn.`,
+    );
+  }
+  console.log("");
+  return result.ok ? 0 : 1;
+}
+
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   const config = load();
 
-  if (args[0] === "activate") return activate(config, args[1] === "--cloud");
+  if (args[0] === "activate") {
+    const e = args.indexOf("--editor");
+    const editor = e >= 0 ? args[e + 1] : "claude-code";
+    if (
+      editor !== "claude-code" &&
+      editor !== "codex" &&
+      editor !== "gemini-cli"
+    ) {
+      console.error("  --editor takes claude-code, codex or gemini-cli.");
+      return 2;
+    }
+    return activate(config, args[1] === "--cloud", editor);
+  }
+  if (args[0] === "setup") return setup(args[1]);
   if (args[0] === "deactivate") return deactivate(config);
   if (args[0] === "status") return status(config);
   if (args[0] === "session-check") return sessionCheck(config);
   if (args[0] === "--version") {
     console.log(VERSION);
     return 0;
+  }
+
+  // A hook that waits for its command (Gemini CLI's) gets its answer now,
+  // and the sync goes on in a process of its own.
+  if (args.includes("--detach")) {
+    spawn(process.execPath, [self(), ...args.filter((a) => a !== "--detach")], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    }).unref();
+    // Gemini CLI reads a hook's output as JSON.
+    if (args.includes("gemini-cli")) console.log("{}");
+    return 0;
+  }
+
+  // Run by Claude Code: keep a standalone copy set up for another assistant
+  // on this build.
+  if (process.env.CLAUDE_PLUGIN_ROOT) {
+    try {
+      refreshStandalone(self(), VERSION);
+    } catch {
+      // The copy stays as it was; its own sync still runs.
+    }
   }
 
   const i = args.indexOf("--throttle");
@@ -627,13 +750,17 @@ async function reportFailure(err: unknown): Promise<void> {
   });
 }
 
-const INTERACTIVE = new Set(["activate", "deactivate", "status"]);
+const INTERACTIVE = new Set(["activate", "deactivate", "status", "setup"]);
 
 main()
   .then((code) => process.exit(code))
   .catch(async (err) => {
     logFailure(err);
-    if (process.argv[2] === "activate" || process.argv[2] === "deactivate") {
+    if (
+      process.argv[2] === "activate" ||
+      process.argv[2] === "deactivate" ||
+      process.argv[2] === "setup"
+    ) {
       console.error(`  ${(err as Error).message}`);
       process.exit(1);
     }

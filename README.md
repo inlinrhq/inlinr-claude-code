@@ -1,7 +1,9 @@
 # inlinr-claude-code
 
 Track your Claude Code sessions on [inlinr.com](https://inlinr.com) — time,
-token usage, and how many lines the assistant actually wrote.
+token usage, and how many lines the assistant actually wrote. Since 0.6.0 it
+reads Codex and Gemini CLI sessions on the same machine too: see
+[Codex and Gemini CLI](#codex-and-gemini-cli).
 
 Works on macOS, Linux and Windows.
 
@@ -61,6 +63,41 @@ languages printed into a terminal is a thing people run once. `status` exists
 because "is this actually working" is a question you have *here*, in the
 session, and cannot answer from the dashboard — an empty dashboard looks the
 same whether nothing was tracked or nothing was sent.
+
+## Codex and Gemini CLI
+
+Codex (the CLI and the desktop app) and Gemini CLI write their sessions to
+disk, like Claude Code: `~/.codex/sessions/` (or `$CODEX_HOME`) and
+`~/.gemini/tmp/<project>/chats/`. Every sync reads them as well, so **with the
+plugin installed and activated, there is nothing to do**: work in Codex or
+Gemini CLI shows up on Inlinr under that assistant, with its model, tokens and
+the lines it wrote, the next time Claude Code syncs.
+
+Without Claude Code, run the same script from your assistant's own hook. It
+needs Node 18 or later:
+
+```
+curl -fsSL https://github.com/inlinrhq/inlinr-claude-code/raw/main/dist/index.js -o inlinr.js
+node inlinr.js activate --editor codex     # or gemini-cli
+node inlinr.js setup codex                  # or gemini-cli
+```
+
+`setup` copies the script to `~/.inlinr/agents.js` and adds one hook:
+
+- **Codex**: `notify` in `~/.codex/config.toml`, run after each turn. Codex
+  takes a single `notify` program; if you already have one, `setup` leaves it
+  and prints the command to call from it.
+- **Gemini CLI**: an `AfterAgent` and a `SessionEnd` hook in
+  `~/.gemini/settings.json`, named `inlinr`. Gemini CLI waits for its hooks,
+  so this one hands the sync to a background process and returns at once.
+
+Run both commands again to update the copy. With the Claude Code plugin on the
+same machine, the plugin keeps `~/.inlinr/agents.js` on its own version.
+
+As with Claude Code, tracking starts at activation: sessions from before are
+not sent. Codex counts tokens per response; cached input is reported apart
+from input. Gemini CLI 0.38 and older wrote sessions as one JSON file
+rewritten whole, which is not read.
 
 ## Cloud sessions
 
@@ -196,7 +233,7 @@ time. The branch is the one checked out when the sync runs.
 ## What gets sent
 
 Read from `~/.claude/projects/**/*.jsonl` — the transcripts Claude Code already
-writes on your machine:
+writes on your machine — and from Codex's and Gemini CLI's session files:
 
 | Sent | Not sent |
 |---|---|
