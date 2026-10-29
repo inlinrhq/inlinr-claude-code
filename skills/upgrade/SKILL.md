@@ -1,6 +1,6 @@
 ---
 name: upgrade
-description: Upgrade an npm dependency of this codebase with what Inlinr knows about the versions in between - breaking changes, migration guides, advisories - then fix the code and run the checks. Use when the user types /inlinr:upgrade, or asks to upgrade, bump or migrate an npm package.
+description: Upgrade an npm dependency of this codebase with what inlinr knows about the versions in between - breaking changes, migration guides, advisories - then fix the code and run the checks. Use when the user types /inlinr:upgrade, or asks to upgrade, bump or migrate an npm package.
 argument-hint: <package> [version]
 ---
 

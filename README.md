@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://inlinr.com/brand/inlinr-logo-on-dark.svg">
-  <img alt="Inlinr" src="https://inlinr.com/brand/inlinr-logo-on-light.svg" height="36">
+  <img alt="inlinr" src="https://inlinr.com/brand/inlinr-logo-on-light.svg" height="36">
 </picture>
 
 # inlinr-claude-code
@@ -51,10 +51,10 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 | `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
 | `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
 | `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
-| `/inlinr:upgrade <package> [version]` | Upgrade an npm dependency: reads its breaking changes, migration guides and advisories from Inlinr, finds where the code uses it, upgrades, fixes and runs your checks. Only the package name and the two versions are sent. |
+| `/inlinr:upgrade <package> [version]` | Upgrade an npm dependency: reads its breaking changes, migration guides and advisories from inlinr, finds where the code uses it, upgrades, fixes and runs your checks. Only the package name and the two versions are sent. |
 
-You do not have to type them. Ask Claude in plain words ("is Inlinr
-tracking?", "connect Inlinr", "update Inlinr") and it runs the right one, which
+You do not have to type them. Ask Claude in plain words ("is inlinr
+tracking?", "connect inlinr", "update inlinr") and it runs the right one, which
 is the only way in the desktop app's chat. `deactivate` is the exception: it
 only runs when you type it.
 
@@ -75,7 +75,7 @@ Codex (the CLI and the desktop app) and Gemini CLI write their sessions to
 disk, like Claude Code: `~/.codex/sessions/` (or `$CODEX_HOME`) and
 `~/.gemini/tmp/<project>/chats/`. Every sync reads them as well, so **with the
 plugin installed and activated, there is nothing to do**: work in Codex or
-Gemini CLI shows up on Inlinr under that assistant, with its model, tokens and
+Gemini CLI shows up on inlinr under that assistant, with its model, tokens and
 the lines it wrote, the next time Claude Code syncs.
 
 Without Claude Code, run the same script from your assistant's own hook. It
@@ -140,7 +140,7 @@ claude plugin update inlinr@inlinr
 The plugin cache is keyed by version and will not re-fetch one it already has,
 so if that changes nothing, uninstall and install again. `/inlinr:status`
 prints the running version, which is the fastest way to tell whether an update
-actually took. In the desktop app, ask Claude to update Inlinr, or use the
+actually took. In the desktop app, ask Claude to update inlinr, or use the
 `/plugin` menu.
 
 To have every machine update on its own, set `autoUpdate` on the marketplace
@@ -201,7 +201,7 @@ and `/inlinr:status` points at it.
 
 ### How time is counted
 
-Time is the gaps between beats, as everywhere on Inlinr: a gap under your
+Time is the gaps between beats, as everywhere on inlinr: a gap under your
 keystroke timeout counts, a longer one means you walked away. So what matters
 is that a beat exists for every stretch of real work:
 
@@ -254,7 +254,7 @@ project to attribute it to. A repository with no remote (local only, or not
 pushed yet) is tracked under its folder's name; the path is never sent.
 
 When a sync fails on your machine (not a network error, not the server
-refusing it), the plugin tells Inlinr, at most once a day for the same error:
+refusing it), the plugin tells inlinr, at most once a day for the same error:
 the error message and stack with your home folder replaced by `~`, the plugin
 version and your operating system. No token, nothing from the transcripts.
 Turn it off with `error_reports = false` under `[behavior]` in

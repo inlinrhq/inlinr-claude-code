@@ -1,6 +1,6 @@
 ---
 name: status
-description: Check whether Inlinr time tracking works on this machine, and update the plugin. Use when the user types /inlinr or asks whether Inlinr is tracking, its status, or to update it.
+description: Check whether inlinr time tracking works on this machine, and update the plugin. Use when the user types /inlinr or asks whether inlinr is tracking, its status, or to update it.
 ---
 
 Run this exact command and show the user its full output:

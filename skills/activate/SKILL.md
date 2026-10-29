@@ -1,6 +1,6 @@
 ---
 name: activate
-description: Connect this machine to Inlinr time tracking. Use when the user asks to activate, connect or set up Inlinr, or when Inlinr says this machine is not connected.
+description: Connect this machine to inlinr time tracking. Use when the user asks to activate, connect or set up inlinr, or when inlinr says this machine is not connected.
 ---
 
 Run this exact command **in the background** (it waits for the user, which can

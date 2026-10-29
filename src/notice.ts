@@ -14,7 +14,7 @@ export function sessionNotice(
 ): string | null {
   if (!connected) {
     return [
-      "Inlinr (time tracking plugin) is installed but this machine is not connected to an Inlinr account, so nothing is being tracked.",
+      "inlinr (time tracking plugin) is installed but this machine is not connected to an inlinr account, so nothing is being tracked.",
       "Mention this to the user once, briefly, at a natural point in your first reply, and offer to connect it.",
       "If they agree, use the inlinr:activate skill.",
     ].join(" ");
@@ -24,7 +24,7 @@ export function sessionNotice(
     const at = Date.parse(m[1]);
     if (Number.isFinite(at) && now - at < 48 * 3600 * 1000) {
       return [
-        "Inlinr (time tracking plugin) is installed but inlinr.com refused this machine's token: the device was probably removed from the account, so nothing is being tracked.",
+        "inlinr (time tracking plugin) is installed but inlinr.com refused this machine's token: the device was probably removed from the account, so nothing is being tracked.",
         "Mention this to the user once, briefly, and offer to reconnect it with the inlinr:activate skill.",
       ].join(" ");
     }

@@ -27,7 +27,7 @@ export function logFailure(err: unknown): void {
 }
 
 /**
- * A failed sync is also sent to Inlinr (see report.ts): the log tells the
+ * A failed sync is also sent to inlinr (see report.ts): the log tells the
  * user, this tells us. The commands someone types report nothing, they see
  * the error themselves.
  */
