@@ -4,7 +4,7 @@
 > workspace, absent d'un clone seul) : il tient l'état du chantier en cours. Mets-le à jour
 > après chaque modification.
 
-Claude Code plugin for Inlinr. Reads Claude Code's own transcripts
+Claude Code plugin for inlinr. Reads Claude Code's own transcripts
 (`~/.claude/projects/**/*.jsonl`, subagents included), and the session files
 of Codex (`~/.codex/sessions/`) and Gemini CLI (`~/.gemini/tmp/*/chats/`) on
 the same machine, turns them into heartbeats with tokens and AI-written

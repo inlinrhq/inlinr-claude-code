@@ -22,7 +22,7 @@ export function setup(tool: string | undefined): number {
   console.log(`  ${result.message}`);
   if (result.ok) {
     console.log(
-      `  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to Inlinr after each turn.`,
+      `  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to inlinr after each turn.`,
     );
   }
   console.log("");

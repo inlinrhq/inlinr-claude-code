@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
- * Tell Inlinr when a sync breaks, so it shows in Admin → Errors
+ * Tell inlinr when a sync breaks, so it shows in Admin → Errors
  * (`POST /api/v1/plugin-errors`).
  *
  * `claude-code.log` keeps every failure on the machine, and `status` points

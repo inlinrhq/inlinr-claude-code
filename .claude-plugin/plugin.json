@@ -1,9 +1,9 @@
 {
   "name": "inlinr",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Track time, tokens and AI-written lines from Claude Code, Codex and Gemini CLI on inlinr.com",
   "author": {
-    "name": "Inlinr",
+    "name": "inlinr",
     "url": "https://inlinr.com"
   },
   "homepage": "https://inlinr.com",

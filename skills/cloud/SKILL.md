@@ -1,6 +1,6 @@
 ---
 name: cloud
-description: Track Claude Code cloud (web) sessions on Inlinr. Use when the user asks to track cloud or web sessions.
+description: Track Claude Code cloud (web) sessions on inlinr. Use when the user asks to track cloud or web sessions.
 ---
 
 Run this exact command **in the background** (it waits for the user, which can
@@ -16,7 +16,7 @@ and approve it. Then wait for the command to finish and show the rest of its
 output.
 
 Once it finishes it prints the three steps that make cloud sessions report to
-Inlinr: an environment variable, a network allowlist entry, and a hook to add
+inlinr: an environment variable, a network allowlist entry, and a hook to add
 to each repository's `.claude/settings.json`.
 
 Cloud sessions do not install plugins, which is why the hook goes in the

@@ -1,6 +1,6 @@
 ---
 name: deactivate
-description: Disconnect this machine from your Inlinr account
+description: Disconnect this machine from your inlinr account
 disable-model-invocation: true
 ---
 
