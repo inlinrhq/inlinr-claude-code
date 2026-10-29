@@ -26,7 +26,12 @@ Sibling repos:
 .claude-plugin/marketplace.json  # marketplace entry (version)
 hooks/hooks.json                 # when Claude Code runs us (see below)
 skills/{activate,status,deactivate,cloud}/SKILL.md   # the /inlinr:* commands
-src/index.ts      # entry: subcommands, transcript walk, sync, VERSION
+src/index.ts      # entry: dispatches to a command, never breaks the turn on failure
+src/commands/     # one file per command: activate, cloud, deactivate, session-check, setup, status, sync
+src/sessions.ts   # every session file on the machine, what is new since the last read
+src/repo.ts       # the repository (remote or folder name, branch) a directory belongs to
+src/failure.ts    # a failed hook: ~/.inlinr/claude-code.log and the error report
+src/version.ts    # VERSION
 src/transcript.ts # JSONL parser: edits, lines, tokens, sessions, carry-over
 src/agents/codex.ts   # Codex rollouts: apply_patch edits, token_count / token_usage_record
 src/agents/gemini.ts  # Gemini CLI sessions: messages rewritten by id, diffStat lines
@@ -76,7 +81,7 @@ dist/index.js     # the committed bundle Claude Code actually runs
    `src/`.
 2. Bump the version in **four** places, which `scripts/check-version.mjs`
    (CI) checks agree: `package.json`, `.claude-plugin/plugin.json`,
-   `.claude-plugin/marketplace.json`, `const VERSION` in `src/index.ts`.
+   `.claude-plugin/marketplace.json`, `const VERSION` in `src/version.ts`.
 3. Merge to `main`. Users get it through the marketplace (`autoUpdate`) and
    cloud hooks at once; there is no tag step. Describe the release in the PR
    and keep README.md true (commands, what gets sent, troubleshooting).

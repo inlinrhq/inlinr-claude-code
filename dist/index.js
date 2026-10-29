@@ -1,23 +1,893 @@
 #!/usr/bin/env node
 
 // src/index.ts
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+
+// src/agents/setup.ts
 import {
-  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync3,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { join as join3 } from "node:path";
+
+// src/config.ts
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+var DEFAULT_API = "https://inlinr.com";
+function trustedApiUrl(raw) {
+  const value = raw?.trim();
+  if (!value)
+    return DEFAULT_API;
+  try {
+    const url = new URL(value);
+    const local = (url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    const ours = url.protocol === "https:" && (url.hostname === "inlinr.com" || url.hostname === "www.inlinr.com") && !url.port;
+    if ((local || ours) && !url.username && !url.password) {
+      return url.origin;
+    }
+  } catch {}
+  return DEFAULT_API;
+}
+function configDir() {
+  const override = process.env.INLINR_HOME?.trim();
+  if (override)
+    return override;
+  return join(homedir(), ".inlinr");
+}
+var configPath = () => join(configDir(), "claude-code.json");
+function load() {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+    return {
+      deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
+      apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
+      lastParsedAt: typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
+      lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
+      files: raw.files && typeof raw.files === "object" ? raw.files : {}
+    };
+  } catch {
+    return {
+      deviceToken: "",
+      apiUrl: trustedApiUrl(process.env.INLINR_API_URL),
+      lastParsedAt: null,
+      lastSyncAt: null,
+      files: {}
+    };
+  }
+}
+function token(config) {
+  return config.deviceToken || process.env.INLINR_TOKEN?.trim() || "";
+}
+function save(config) {
+  const dir = configDir();
+  mkdirSync(dir, { recursive: true });
+  const path = configPath();
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}
+`, {
+    encoding: "utf8",
+    mode: 384
+  });
+  renameSync(tmp, path);
+}
+var SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
+function acquireSyncLock(now = Date.now()) {
+  const dir = configDir();
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "claude-code.lock");
+  for (let attempt = 0;attempt < 2; attempt++) {
+    try {
+      closeSync(openSync(path, "wx", 384));
+      return () => {
+        try {
+          unlinkSync(path);
+        } catch {}
+      };
+    } catch (err) {
+      if (err.code !== "EEXIST")
+        throw err;
+      let age = 0;
+      try {
+        age = now - statSync(path).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (age < SYNC_LOCK_STALE_MS)
+        return null;
+      try {
+        unlinkSync(path);
+      } catch {}
+    }
+  }
+  return null;
+}
+
+// src/agents/sources.ts
+import { readdirSync, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename, join as join2 } from "node:path";
+function list(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return [];
+  }
+}
+function stat(path) {
+  try {
+    const st = statSync2(path);
+    return st.isFile() ? { size: st.size, mtime: st.mtime } : null;
+  } catch {
+    return null;
+  }
+}
+function codexHome() {
+  return process.env.CODEX_HOME?.trim() || join2(homedir2(), ".codex");
+}
+var ROLLOUT = /^rollout-.*\.jsonl$/;
+function codexFiles(home = codexHome()) {
+  const out = [];
+  const add = (path) => {
+    const st = stat(path);
+    if (st)
+      out.push({ tool: "codex", key: `codex:${basename(path)}`, path, ...st });
+  };
+  const sessions = join2(home, "sessions");
+  for (const y of list(sessions)) {
+    if (!y.isDirectory() || !/^\d{4}$/.test(y.name))
+      continue;
+    for (const m of list(join2(sessions, y.name))) {
+      if (!m.isDirectory() || !/^\d{2}$/.test(m.name))
+        continue;
+      for (const d of list(join2(sessions, y.name, m.name))) {
+        if (!d.isDirectory() || !/^\d{2}$/.test(d.name))
+          continue;
+        const dir = join2(sessions, y.name, m.name, d.name);
+        for (const f of list(dir)) {
+          if (f.isFile() && ROLLOUT.test(f.name))
+            add(join2(dir, f.name));
+        }
+      }
+    }
+  }
+  const archived = join2(home, "archived_sessions");
+  for (const f of list(archived)) {
+    if (f.isFile() && ROLLOUT.test(f.name))
+      add(join2(archived, f.name));
+  }
+  return out;
+}
+function geminiHome() {
+  return join2(homedir2(), ".gemini");
+}
+function geminiFiles(home = geminiHome()) {
+  const out = [];
+  const tmp = join2(home, "tmp");
+  for (const p of list(tmp)) {
+    if (!p.isDirectory())
+      continue;
+    const chats = join2(tmp, p.name, "chats");
+    const files = list(chats).filter((f) => f.isFile() && /^session-.*\.jsonl$/.test(f.name));
+    if (files.length === 0)
+      continue;
+    let root = "";
+    try {
+      root = readFileSync2(join2(tmp, p.name, ".project_root"), "utf8").trim();
+    } catch {}
+    for (const f of files) {
+      const path = join2(chats, f.name);
+      const st = stat(path);
+      if (st)
+        out.push({
+          tool: "gemini-cli",
+          key: path,
+          path,
+          ...st,
+          ...root ? { root } : {}
+        });
+    }
+  }
+  return out;
+}
+
+// src/agents/setup.ts
+var standalonePath = () => join3(configDir(), "agents.js");
+function bundleVersion(source) {
+  return /VERSION = "(\d+\.\d+\.\d+)"/.exec(source)?.[1] ?? null;
+}
+function older(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0;i < 3; i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0))
+      return (pa[i] ?? 0) < (pb[i] ?? 0);
+  }
+  return false;
+}
+function installStandalone(self) {
+  const target = standalonePath();
+  mkdirSync2(configDir(), { recursive: true });
+  if (self !== target)
+    copyFileSync(self, target);
+  return target;
+}
+function refreshStandalone(self, version) {
+  const target = standalonePath();
+  if (self === target || !existsSync(target))
+    return;
+  const installed = bundleVersion(readFileSync3(target, "utf8"));
+  if (installed && !older(installed, version))
+    return;
+  copyFileSync(self, target);
+}
+function codexNotify(node, script) {
+  const argv = [node, script, "--from", "codex", "--detach"];
+  return `notify = [${argv.map((a) => JSON.stringify(a)).join(", ")}]`;
+}
+function setupCodex(node, script, home = codexHome()) {
+  const path = join3(home, "config.toml");
+  let toml = "";
+  try {
+    toml = readFileSync3(path, "utf8");
+  } catch {}
+  const line = codexNotify(node, script);
+  const existing = /^\s*notify\s*=.*$/m.exec(toml);
+  if (existing) {
+    if (existing[0].includes("--from")) {
+      writeFileSync2(path, toml.replace(existing[0], line), "utf8");
+      return { ok: true, message: `Updated notify in ${path}.` };
+    }
+    return {
+      ok: false,
+      message: `Codex already runs a program after each turn (notify in ${path}), and it takes only one. Run this from that program instead:
+
+     ${JSON.stringify(node)} ${JSON.stringify(script)} --from codex --detach`
+    };
+  }
+  mkdirSync2(home, { recursive: true });
+  writeFileSync2(path, `${line}
+${toml}`, "utf8");
+  return { ok: true, message: `Added notify to ${path}.` };
+}
+var HOOK_NAME = "inlinr";
+function geminiHooks(node, script) {
+  return {
+    hooks: [
+      {
+        name: HOOK_NAME,
+        type: "command",
+        command: `"${node}" "${script}" --from gemini-cli --detach`
+      }
+    ]
+  };
+}
+function setupGemini(node, script, home = geminiHome()) {
+  const path = join3(home, "settings.json");
+  let settings = {};
+  try {
+    settings = JSON.parse(readFileSync3(path, "utf8"));
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      const hooks = {
+        AfterAgent: [geminiHooks(node, script)],
+        SessionEnd: [geminiHooks(node, script)]
+      };
+      return {
+        ok: false,
+        message: `Could not read ${path}. Add this under "hooks" yourself:
+
+${JSON.stringify(hooks, null, 2)}`
+      };
+    }
+  }
+  const hooks = settings.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
+  for (const event of ["AfterAgent", "SessionEnd"]) {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
+    const others = groups.filter((g) => !g.hooks?.some((h) => h.name === HOOK_NAME));
+    hooks[event] = [...others, geminiHooks(node, script)];
+  }
+  settings.hooks = hooks;
+  mkdirSync2(home, { recursive: true });
+  writeFileSync2(path, `${JSON.stringify(settings, null, 2)}
+`, "utf8");
+  return { ok: true, message: `Added the hooks to ${path}.` };
+}
+
+// src/commands/activate.ts
+import { execFileSync } from "node:child_process";
+import { hostname } from "node:os";
+
+// src/api.ts
+import { dirname } from "node:path";
+async function startDeviceFlow(apiUrl, hostname, platform, editor = "claude-code") {
+  const res = await fetch(`${apiUrl}/api/auth/device`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: hostname,
+      editor,
+      platform
+    })
+  });
+  if (!res.ok)
+    throw new Error(`could not start activation (HTTP ${res.status})`);
+  return await res.json();
+}
+async function pollDeviceToken(apiUrl, deviceCode) {
+  const res = await fetch(`${apiUrl}/api/auth/device/token`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ device_code: deviceCode })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.ok && typeof body.access_token === "string") {
+    return { status: "ok", token: body.access_token };
+  }
+  if (body.error === "authorization_pending")
+    return { status: "pending" };
+  return {
+    status: "denied",
+    error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`
+  };
+}
+var COALESCE_WINDOW_MS = 2 * 60 * 1000;
+function coalesceEdits(edits) {
+  const byBucket = new Map;
+  for (const edit of edits) {
+    const at = Date.parse(edit.timestamp);
+    if (Number.isNaN(at))
+      continue;
+    const bucket = Math.floor(at / COALESCE_WINDOW_MS);
+    const key = `${edit.path}|${bucket}`;
+    const found = byBucket.get(key);
+    if (!found) {
+      byBucket.set(key, { ...edit });
+      continue;
+    }
+    found.linesAdded += edit.linesAdded;
+    found.linesRemoved += edit.linesRemoved;
+    found.lineChanges += edit.lineChanges;
+    if (at > Date.parse(found.timestamp))
+      found.timestamp = edit.timestamp;
+  }
+  return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+function projectOf(repo) {
+  return repo.remote ? { project_git_remote: repo.remote } : { project: repo.project };
+}
+var ACTIVITY_WINDOW_MS = 60 * 1000;
+function toHeartbeats(session, resolve, pluginVersion) {
+  const plugin = `claude-code-inlinr/${pluginVersion}`;
+  const base = {
+    editor: session.tool,
+    plugin,
+    ai_tool: session.tool,
+    ai_session: session.id,
+    ...session.model ? { ai_model: session.model } : {}
+  };
+  const edits = coalesceEdits(session.edits).flatMap((edit) => {
+    const repo = resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    return repo ? [{ edit, repo }] : [];
+  });
+  const beats = edits.map(({ edit, repo }) => ({
+    ...base,
+    entity: edit.path,
+    type: "file",
+    time: Date.parse(edit.timestamp) / 1000,
+    category: "coding",
+    ...projectOf(repo),
+    ...repo.branch ? { branch: repo.branch } : {},
+    is_write: true,
+    lines_added: edit.linesAdded,
+    lines_deleted: edit.linesRemoved,
+    ai_lines_added: edit.linesAdded,
+    ai_lines_deleted: edit.linesRemoved,
+    ai_line_changes: edit.lineChanges
+  }));
+  const nearestEdit = (at) => {
+    let best = null;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const { edit, repo } of edits) {
+      const gap = Math.abs(Date.parse(edit.timestamp) - at);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = repo;
+      }
+    }
+    return best;
+  };
+  const windows = new Map;
+  for (const a of session.activity) {
+    const at = Date.parse(a.at);
+    if (Number.isNaN(at))
+      continue;
+    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    if (!repo)
+      continue;
+    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+    const found = windows.get(key);
+    if (found && found.time * 1000 >= at)
+      continue;
+    windows.set(key, {
+      ...base,
+      entity: session.tool,
+      type: "app",
+      time: at / 1000,
+      category: "ai-coding",
+      ...projectOf(repo),
+      ...repo.branch ? { branch: repo.branch } : {}
+    });
+  }
+  const activity = [...windows.values()].sort((a, b) => a.time - b.time);
+  beats.push(...activity);
+  const t = session.tokens;
+  const anyTokens = t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
+  const last = activity.at(-1);
+  if (anyTokens && last) {
+    last.ai_input_tokens = t.input;
+    last.ai_output_tokens = t.output;
+    last.ai_cache_read_tokens = t.cacheRead;
+    last.ai_cache_write_tokens = t.cacheWrite;
+  }
+  return beats.sort((a, b) => a.time - b.time);
+}
+var MAX_BATCH = 1000;
+async function sendHeartbeats(apiUrl, token, beats) {
+  let accepted = 0;
+  for (let i = 0;i < beats.length; i += MAX_BATCH) {
+    const chunk = beats.slice(i, i + MAX_BATCH);
+    const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(chunk)
+    });
+    if (!res.ok) {
+      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted, status: res.status });
+    }
+    const body = await res.json().catch(() => ({}));
+    accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
+  }
+  return { accepted };
+}
+async function revokeDevice(apiUrl, token) {
+  try {
+    const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// src/commands/cloud.ts
+var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
+function cloudHook(throttle) {
+  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
+  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
+}
+function printCloudSetup(deviceToken) {
+  const hook = (throttle) => [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: cloudHook(throttle),
+          timeout: 20,
+          async: true
+        }
+      ]
+    }
+  ];
+  const settings = {
+    hooks: {
+      SessionStart: hook(0),
+      UserPromptSubmit: hook(120),
+      PostToolUse: hook(120),
+      SubagentStop: hook(120),
+      Stop: hook(0),
+      SessionEnd: hook(0)
+    }
+  };
+  console.log("");
+  console.log("  Approved. Three steps in Claude Code on the web:");
+  console.log("");
+  console.log("  1. In the cloud environment's settings, add this environment variable:");
+  console.log("");
+  console.log(`     INLINR_TOKEN=${deviceToken}`);
+  console.log("");
+  console.log("  2. In the same settings, set network access to Custom, add inlinr.com,");
+  console.log("     and keep the default list of package managers.");
+  console.log("");
+  console.log("  3. Merge this into .claude/settings.json in each repository you work on:");
+  console.log("");
+  console.log(JSON.stringify(settings, null, 2).split(`
+`).map((l) => `     ${l}`).join(`
+`));
+  console.log("");
+  console.log("  Keep the token private: anyone using the environment can read it.");
+  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
+}
+
+// src/commands/activate.ts
+function openBrowser(url) {
+  const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
+  try {
+    execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
+  } catch {}
+}
+async function activate(config, cloud = false, editor = "claude-code") {
+  const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform, editor);
+  openBrowser(init.verification_uri_complete);
+  console.log("");
+  console.log(cloud ? "  Approve Claude Code cloud in the browser tab that just opened." : "  Approve this machine in the browser tab that just opened.");
+  console.log(`  If it did not open: ${init.verification_uri_complete}`);
+  console.log("");
+  console.log(`  The code, if it asks: ${init.user_code}`);
+  const deadline = Date.now() + init.expires_in * 1000;
+  const wait = Math.max(1, init.interval) * 1000;
+  let delay = 800;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, delay));
+    delay = wait;
+    const result = await pollDeviceToken(config.apiUrl, init.device_code);
+    if (result.status === "ok") {
+      if (cloud) {
+        printCloudSetup(result.token);
+        return 0;
+      }
+      save({
+        ...config,
+        deviceToken: result.token,
+        lastParsedAt: new Date().toISOString(),
+        files: {}
+      });
+      console.log("  Activated. Tracking starts now.");
+      return 0;
+    }
+    if (result.status === "denied") {
+      console.error(`  Activation failed: ${result.error}`);
+      return 1;
+    }
+  }
+  console.error("  That code expired. Run activation again.");
+  return 1;
+}
+
+// src/commands/deactivate.ts
+async function deactivate(config) {
+  if (!config.deviceToken) {
+    console.log(token(config) ? "  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking." : "  This machine is not connected.");
+    return 0;
+  }
+  const revoked = await revokeDevice(config.apiUrl, config.deviceToken);
+  save({
+    ...config,
+    deviceToken: "",
+    lastParsedAt: null,
+    lastSyncAt: null,
+    files: {}
+  });
+  console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
+  return 0;
+}
+
+// src/commands/session-check.ts
+import { readFileSync as readFileSync6 } from "node:fs";
+
+// src/failure.ts
+import { appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
+import { join as join5 } from "node:path";
+
+// src/report.ts
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
+var RESEND_AFTER_MS = 24 * 60 * 60 * 1000;
+var FORGET_AFTER_MS = 7 * RESEND_AFTER_MS;
+var TIMEOUT_MS = 3000;
+function reportsEnabled(env, configToml) {
+  const off = (v) => v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
+  if (env.INLINR_ERROR_REPORTS === "0")
+    return false;
+  if (off(env.DISABLE_ERROR_REPORTING) || off(env.DISABLE_TELEMETRY) || off(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)) {
+    return false;
+  }
+  return !(configToml && /^\s*error_reports\s*=\s*false\b/m.test(configToml));
+}
+function isServersOrNetworks(err) {
+  if (!(err instanceof Error))
+    return false;
+  if (typeof err.status === "number")
+    return true;
+  if (err.name === "AbortError" || err.name === "TimeoutError")
+    return true;
+  if (err instanceof TypeError && err.message === "fetch failed")
+    return true;
+  const code = err.code;
+  return typeof code === "string" && /^(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_)/.test(code);
+}
+function scrubHome(text, home = homedir3()) {
+  if (home.length < 3)
+    return text;
+  return text.split(home).join("~").split(home.replace(/\\/g, "/")).join("~");
+}
+function signature(context, message) {
+  return `${context}
+${message.replace(/\d{4,}/g, "#")}`;
+}
+function readSent(path) {
+  try {
+    const raw = JSON.parse(readFileSync4(path, "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+async function reportError(context, err, opts) {
+  try {
+    if (!opts.enabled || isServersOrNetworks(err))
+      return;
+    const error = err instanceof Error ? err : new Error(String(err));
+    const message = scrubHome(error.message);
+    const key = signature(context, message);
+    const t = (opts.now ?? Date.now)();
+    const sent = readSent(opts.statePath);
+    const last = sent[key];
+    if (last !== undefined && t - last < RESEND_AFTER_MS)
+      return;
+    sent[key] = t;
+    for (const [k, at] of Object.entries(sent)) {
+      if (t - at > FORGET_AFTER_MS)
+        delete sent[k];
+    }
+    try {
+      mkdirSync3(join4(opts.statePath, ".."), { recursive: true });
+      writeFileSync3(opts.statePath, JSON.stringify(sent), { mode: 384 });
+    } catch {}
+    const body = JSON.stringify({
+      source: "claude-code",
+      version: `claude-code-inlinr/${opts.version}`,
+      platform: `${process.platform}-${process.arch}`,
+      editor: "claude-code",
+      context,
+      message,
+      stack: error.stack ? scrubHome(error.stack) : null
+    });
+    const send = opts.send ?? ((url, b) => fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: b,
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    }));
+    await send(`${opts.apiUrl}/api/v1/plugin-errors`, body);
+  } catch {}
+}
+
+// src/version.ts
+var VERSION = "0.6.0";
+
+// src/failure.ts
+var logPath = () => join5(configDir(), "claude-code.log");
+function logFailure(err) {
+  try {
+    const line = `${new Date().toISOString()} ${err?.message ?? String(err)}
+`;
+    mkdirSync4(configDir(), { recursive: true });
+    appendFileSync(logPath(), line, "utf8");
+  } catch {}
+}
+async function reportFailure(err) {
+  let configToml = null;
+  try {
+    configToml = readFileSync5(join5(configDir(), "config.toml"), "utf8");
+  } catch {}
+  await reportError("sync", err, {
+    apiUrl: load().apiUrl,
+    version: VERSION,
+    enabled: reportsEnabled(process.env, configToml),
+    statePath: join5(configDir(), "error-reports-claude-code.json")
+  });
+}
+
+// src/notice.ts
+function sessionNotice(connected, lastLogLine, now = Date.now()) {
+  if (!connected) {
+    return [
+      "Inlinr (time tracking plugin) is installed but this machine is not connected to an Inlinr account, so nothing is being tracked.",
+      "Mention this to the user once, briefly, at a natural point in your first reply, and offer to connect it.",
+      "If they agree, use the inlinr:activate skill."
+    ].join(" ");
+  }
+  const m = lastLogLine?.match(/^(\S+) .*HTTP 401/);
+  if (m?.[1]) {
+    const at = Date.parse(m[1]);
+    if (Number.isFinite(at) && now - at < 48 * 3600 * 1000) {
+      return [
+        "Inlinr (time tracking plugin) is installed but inlinr.com refused this machine's token: the device was probably removed from the account, so nothing is being tracked.",
+        "Mention this to the user once, briefly, and offer to reconnect it with the inlinr:activate skill."
+      ].join(" ");
+    }
+  }
+  return null;
+}
+
+// src/commands/session-check.ts
+function lastLogLine() {
+  try {
+    const lines = readFileSync6(logPath(), "utf8").trim().split(`
+`);
+    return lines[lines.length - 1] || null;
+  } catch {
+    return null;
+  }
+}
+function sessionCheck(config) {
+  if (process.env.CLAUDE_CODE_REMOTE === "true")
+    return 0;
+  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+  if (notice) {
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: notice
+      }
+    }));
+  }
+  return 0;
+}
+
+// src/commands/setup.ts
+import { resolve } from "node:path";
+var self = () => resolve(process.argv[1] ?? "");
+function setup(tool) {
+  if (tool !== "codex" && tool !== "gemini-cli") {
+    console.error("  Usage: setup codex | setup gemini-cli");
+    return 2;
+  }
+  const script = installStandalone(self());
+  const result = tool === "codex" ? setupCodex(process.execPath, script) : setupGemini(process.execPath, script);
+  console.log("");
+  console.log(`  ${result.message}`);
+  if (result.ok) {
+    console.log(`  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to Inlinr after each turn.`);
+  }
+  console.log("");
+  return result.ok ? 0 : 1;
+}
+
+// src/commands/status.ts
+import { existsSync as existsSync2 } from "node:fs";
+import { hostname as hostname2 } from "node:os";
+
+// src/sessions.ts
+import {
   closeSync as closeSync2,
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync4,
   openSync as openSync2,
   readdirSync as readdirSync2,
-  readFileSync as readFileSync5,
   readSync,
   statSync as statSync3
 } from "node:fs";
-import { homedir as homedir4, hostname } from "node:os";
-import { basename as basename2, dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { join as join6 } from "node:path";
+function claudeProjectsDir() {
+  const override = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return join6(override || join6(homedir4(), ".claude"), "projects");
+}
+function transcripts() {
+  const root = claudeProjectsDir();
+  const out = [];
+  const walk = (dir, subagent) => {
+    let entries;
+    try {
+      entries = readdirSync2(dir, { withFileTypes: true, encoding: "utf8" });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = join6(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === "tool-results")
+          continue;
+        walk(full, subagent || e.name === "subagents");
+        continue;
+      }
+      if (!e.name.endsWith(".jsonl"))
+        continue;
+      try {
+        const st = statSync3(full);
+        out.push({
+          tool: "claude-code",
+          key: full,
+          path: full,
+          size: st.size,
+          mtime: st.mtime,
+          subagent
+        });
+      } catch {}
+    }
+  };
+  walk(root, false);
+  return out;
+}
+function sessionFiles() {
+  return [...transcripts(), ...codexFiles(), ...geminiFiles()];
+}
+function readFrom(path, offset, size) {
+  const length = size - offset;
+  if (length <= 0)
+    return { text: "", end: offset };
+  const buf = Buffer.alloc(length);
+  const fd = openSync2(path, "r");
+  let read = 0;
+  try {
+    read = readSync(fd, buf, 0, length, offset);
+  } finally {
+    closeSync2(fd);
+  }
+  const last = buf.subarray(0, read).lastIndexOf(10);
+  if (last < 0)
+    return { text: "", end: offset };
+  return {
+    text: buf.subarray(0, last + 1).toString("utf8"),
+    end: offset + last + 1
+  };
+}
+function hasNew(config, t) {
+  const state = config.files[t.key];
+  if (state)
+    return t.size !== state.offset;
+  const since = config.lastParsedAt ? Date.parse(config.lastParsedAt) : Number.NaN;
+  return Number.isNaN(since) || t.mtime.getTime() > since;
+}
+
+// src/commands/status.ts
+async function status(config) {
+  const all = sessionFiles();
+  const pending = all.filter((t) => hasNew(config, t)).length;
+  const count = (tool) => all.filter((t) => t.tool === tool).length;
+  const connected = token(config) ? config.deviceToken ? "connected" : "connected (INLINR_TOKEN)" : "not connected — run /inlinr:activate";
+  console.log("");
+  console.log(`  Plugin      ${VERSION}`);
+  console.log(`  Machine     ${hostname2()}`);
+  console.log(`  Account     ${connected}`);
+  console.log(`  Server      ${config.apiUrl}`);
+  console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
+  console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
+  console.log(`              Claude Code ${count("claude-code")}, Codex ${count("codex")}, Gemini CLI ${count("gemini-cli")}`);
+  if (token(config) && all.length === 0) {
+    console.log("");
+    console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
+    console.log("  so this is expected on a machine where you have not used it yet.");
+  }
+  const log = logPath();
+  if (existsSync2(log)) {
+    console.log("");
+    console.log(`  Errors have been logged to ${log}`);
+  }
+  console.log("");
+  return 0;
+}
 
 // src/agents/codex.ts
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve as resolve2 } from "node:path";
 
 // src/transcript.ts
 var emptyTokens = () => ({
@@ -158,7 +1028,7 @@ function codexTokens(usage) {
 }
 function parsePatch(patch, cwd) {
   const files = [];
-  const where = (p) => isAbsolute(p) || !cwd ? p : resolve(cwd, p);
+  const where = (p) => isAbsolute(p) || !cwd ? p : resolve2(cwd, p);
   let current = null;
   for (const raw of patch.split(`
 `)) {
@@ -485,651 +1355,13 @@ function parseGemini(content, options = {}) {
     state
   };
 }
-// src/agents/setup.ts
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync as mkdirSync2,
-  readFileSync as readFileSync3,
-  writeFileSync as writeFileSync2
-} from "node:fs";
-import { join as join3 } from "node:path";
-
-// src/config.ts
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync
-} from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-var DEFAULT_API = "https://inlinr.com";
-function trustedApiUrl(raw) {
-  const value = raw?.trim();
-  if (!value)
-    return DEFAULT_API;
-  try {
-    const url = new URL(value);
-    const local = (url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
-    const ours = url.protocol === "https:" && (url.hostname === "inlinr.com" || url.hostname === "www.inlinr.com") && !url.port;
-    if ((local || ours) && !url.username && !url.password) {
-      return url.origin;
-    }
-  } catch {}
-  return DEFAULT_API;
-}
-function configDir() {
-  const override = process.env.INLINR_HOME?.trim();
-  if (override)
-    return override;
-  return join(homedir(), ".inlinr");
-}
-var configPath = () => join(configDir(), "claude-code.json");
-function load() {
-  try {
-    const raw = JSON.parse(readFileSync(configPath(), "utf8"));
-    return {
-      deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
-      apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
-      lastParsedAt: typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
-      lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
-      files: raw.files && typeof raw.files === "object" ? raw.files : {}
-    };
-  } catch {
-    return {
-      deviceToken: "",
-      apiUrl: trustedApiUrl(process.env.INLINR_API_URL),
-      lastParsedAt: null,
-      lastSyncAt: null,
-      files: {}
-    };
-  }
-}
-function token(config) {
-  return config.deviceToken || process.env.INLINR_TOKEN?.trim() || "";
-}
-function save(config) {
-  const dir = configDir();
-  mkdirSync(dir, { recursive: true });
-  const path = configPath();
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}
-`, {
-    encoding: "utf8",
-    mode: 384
-  });
-  renameSync(tmp, path);
-}
-var SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
-function acquireSyncLock(now = Date.now()) {
-  const dir = configDir();
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, "claude-code.lock");
-  for (let attempt = 0;attempt < 2; attempt++) {
-    try {
-      closeSync(openSync(path, "wx", 384));
-      return () => {
-        try {
-          unlinkSync(path);
-        } catch {}
-      };
-    } catch (err) {
-      if (err.code !== "EEXIST")
-        throw err;
-      let age = 0;
-      try {
-        age = now - statSync(path).mtimeMs;
-      } catch {
-        continue;
-      }
-      if (age < SYNC_LOCK_STALE_MS)
-        return null;
-      try {
-        unlinkSync(path);
-      } catch {}
-    }
-  }
-  return null;
-}
-
-// src/agents/sources.ts
-import { readdirSync, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { basename, join as join2 } from "node:path";
-function list(dir) {
-  try {
-    return readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
-  } catch {
-    return [];
-  }
-}
-function stat(path) {
-  try {
-    const st = statSync2(path);
-    return st.isFile() ? { size: st.size, mtime: st.mtime } : null;
-  } catch {
-    return null;
-  }
-}
-function codexHome() {
-  return process.env.CODEX_HOME?.trim() || join2(homedir2(), ".codex");
-}
-var ROLLOUT = /^rollout-.*\.jsonl$/;
-function codexFiles(home = codexHome()) {
-  const out = [];
-  const add = (path) => {
-    const st = stat(path);
-    if (st)
-      out.push({ tool: "codex", key: `codex:${basename(path)}`, path, ...st });
-  };
-  const sessions = join2(home, "sessions");
-  for (const y of list(sessions)) {
-    if (!y.isDirectory() || !/^\d{4}$/.test(y.name))
-      continue;
-    for (const m of list(join2(sessions, y.name))) {
-      if (!m.isDirectory() || !/^\d{2}$/.test(m.name))
-        continue;
-      for (const d of list(join2(sessions, y.name, m.name))) {
-        if (!d.isDirectory() || !/^\d{2}$/.test(d.name))
-          continue;
-        const dir = join2(sessions, y.name, m.name, d.name);
-        for (const f of list(dir)) {
-          if (f.isFile() && ROLLOUT.test(f.name))
-            add(join2(dir, f.name));
-        }
-      }
-    }
-  }
-  const archived = join2(home, "archived_sessions");
-  for (const f of list(archived)) {
-    if (f.isFile() && ROLLOUT.test(f.name))
-      add(join2(archived, f.name));
-  }
-  return out;
-}
-function geminiHome() {
-  return join2(homedir2(), ".gemini");
-}
-function geminiFiles(home = geminiHome()) {
-  const out = [];
-  const tmp = join2(home, "tmp");
-  for (const p of list(tmp)) {
-    if (!p.isDirectory())
-      continue;
-    const chats = join2(tmp, p.name, "chats");
-    const files = list(chats).filter((f) => f.isFile() && /^session-.*\.jsonl$/.test(f.name));
-    if (files.length === 0)
-      continue;
-    let root = "";
-    try {
-      root = readFileSync2(join2(tmp, p.name, ".project_root"), "utf8").trim();
-    } catch {}
-    for (const f of files) {
-      const path = join2(chats, f.name);
-      const st = stat(path);
-      if (st)
-        out.push({
-          tool: "gemini-cli",
-          key: path,
-          path,
-          ...st,
-          ...root ? { root } : {}
-        });
-    }
-  }
-  return out;
-}
-
-// src/agents/setup.ts
-var standalonePath = () => join3(configDir(), "agents.js");
-function bundleVersion(source) {
-  return /VERSION = "(\d+\.\d+\.\d+)"/.exec(source)?.[1] ?? null;
-}
-function older(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0;i < 3; i++) {
-    if ((pa[i] ?? 0) !== (pb[i] ?? 0))
-      return (pa[i] ?? 0) < (pb[i] ?? 0);
-  }
-  return false;
-}
-function installStandalone(self) {
-  const target = standalonePath();
-  mkdirSync2(configDir(), { recursive: true });
-  if (self !== target)
-    copyFileSync(self, target);
-  return target;
-}
-function refreshStandalone(self, version) {
-  const target = standalonePath();
-  if (self === target || !existsSync(target))
-    return;
-  const installed = bundleVersion(readFileSync3(target, "utf8"));
-  if (installed && !older(installed, version))
-    return;
-  copyFileSync(self, target);
-}
-function codexNotify(node, script) {
-  const argv = [node, script, "--from", "codex", "--detach"];
-  return `notify = [${argv.map((a) => JSON.stringify(a)).join(", ")}]`;
-}
-function setupCodex(node, script, home = codexHome()) {
-  const path = join3(home, "config.toml");
-  let toml = "";
-  try {
-    toml = readFileSync3(path, "utf8");
-  } catch {}
-  const line = codexNotify(node, script);
-  const existing = /^\s*notify\s*=.*$/m.exec(toml);
-  if (existing) {
-    if (existing[0].includes("--from")) {
-      writeFileSync2(path, toml.replace(existing[0], line), "utf8");
-      return { ok: true, message: `Updated notify in ${path}.` };
-    }
-    return {
-      ok: false,
-      message: `Codex already runs a program after each turn (notify in ${path}), and it takes only one. Run this from that program instead:
-
-     ${JSON.stringify(node)} ${JSON.stringify(script)} --from codex --detach`
-    };
-  }
-  mkdirSync2(home, { recursive: true });
-  writeFileSync2(path, `${line}
-${toml}`, "utf8");
-  return { ok: true, message: `Added notify to ${path}.` };
-}
-var HOOK_NAME = "inlinr";
-function geminiHooks(node, script) {
-  return {
-    hooks: [
-      {
-        name: HOOK_NAME,
-        type: "command",
-        command: `"${node}" "${script}" --from gemini-cli --detach`
-      }
-    ]
-  };
-}
-function setupGemini(node, script, home = geminiHome()) {
-  const path = join3(home, "settings.json");
-  let settings = {};
-  try {
-    settings = JSON.parse(readFileSync3(path, "utf8"));
-  } catch (err) {
-    if (err.code !== "ENOENT") {
-      const hooks = {
-        AfterAgent: [geminiHooks(node, script)],
-        SessionEnd: [geminiHooks(node, script)]
-      };
-      return {
-        ok: false,
-        message: `Could not read ${path}. Add this under "hooks" yourself:
-
-${JSON.stringify(hooks, null, 2)}`
-      };
-    }
-  }
-  const hooks = settings.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
-  for (const event of ["AfterAgent", "SessionEnd"]) {
-    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
-    const others = groups.filter((g) => !g.hooks?.some((h) => h.name === HOOK_NAME));
-    hooks[event] = [...others, geminiHooks(node, script)];
-  }
-  settings.hooks = hooks;
-  mkdirSync2(home, { recursive: true });
-  writeFileSync2(path, `${JSON.stringify(settings, null, 2)}
-`, "utf8");
-  return { ok: true, message: `Added the hooks to ${path}.` };
-}
-
-// src/api.ts
-import { dirname } from "node:path";
-async function startDeviceFlow(apiUrl, hostname, platform, editor = "claude-code") {
-  const res = await fetch(`${apiUrl}/api/auth/device`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      client_name: hostname,
-      editor,
-      platform
-    })
-  });
-  if (!res.ok)
-    throw new Error(`could not start activation (HTTP ${res.status})`);
-  return await res.json();
-}
-async function pollDeviceToken(apiUrl, deviceCode) {
-  const res = await fetch(`${apiUrl}/api/auth/device/token`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ device_code: deviceCode })
-  });
-  const body = await res.json().catch(() => ({}));
-  if (res.ok && typeof body.access_token === "string") {
-    return { status: "ok", token: body.access_token };
-  }
-  if (body.error === "authorization_pending")
-    return { status: "pending" };
-  return {
-    status: "denied",
-    error: typeof body.error === "string" ? body.error : `HTTP ${res.status}`
-  };
-}
-var COALESCE_WINDOW_MS = 2 * 60 * 1000;
-function coalesceEdits(edits) {
-  const byBucket = new Map;
-  for (const edit of edits) {
-    const at = Date.parse(edit.timestamp);
-    if (Number.isNaN(at))
-      continue;
-    const bucket = Math.floor(at / COALESCE_WINDOW_MS);
-    const key = `${edit.path}|${bucket}`;
-    const found = byBucket.get(key);
-    if (!found) {
-      byBucket.set(key, { ...edit });
-      continue;
-    }
-    found.linesAdded += edit.linesAdded;
-    found.linesRemoved += edit.linesRemoved;
-    found.lineChanges += edit.lineChanges;
-    if (at > Date.parse(found.timestamp))
-      found.timestamp = edit.timestamp;
-  }
-  return [...byBucket.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-}
-function projectOf(repo) {
-  return repo.remote ? { project_git_remote: repo.remote } : { project: repo.project };
-}
-var ACTIVITY_WINDOW_MS = 60 * 1000;
-function toHeartbeats(session, resolve, pluginVersion) {
-  const plugin = `claude-code-inlinr/${pluginVersion}`;
-  const base = {
-    editor: session.tool,
-    plugin,
-    ai_tool: session.tool,
-    ai_session: session.id,
-    ...session.model ? { ai_model: session.model } : {}
-  };
-  const edits = coalesceEdits(session.edits).flatMap((edit) => {
-    const repo = resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
-    return repo ? [{ edit, repo }] : [];
-  });
-  const beats = edits.map(({ edit, repo }) => ({
-    ...base,
-    entity: edit.path,
-    type: "file",
-    time: Date.parse(edit.timestamp) / 1000,
-    category: "coding",
-    ...projectOf(repo),
-    ...repo.branch ? { branch: repo.branch } : {},
-    is_write: true,
-    lines_added: edit.linesAdded,
-    lines_deleted: edit.linesRemoved,
-    ai_lines_added: edit.linesAdded,
-    ai_lines_deleted: edit.linesRemoved,
-    ai_line_changes: edit.lineChanges
-  }));
-  const nearestEdit = (at) => {
-    let best = null;
-    let bestGap = Number.POSITIVE_INFINITY;
-    for (const { edit, repo } of edits) {
-      const gap = Math.abs(Date.parse(edit.timestamp) - at);
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = repo;
-      }
-    }
-    return best;
-  };
-  const windows = new Map;
-  for (const a of session.activity) {
-    const at = Date.parse(a.at);
-    if (Number.isNaN(at))
-      continue;
-    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
-    if (!repo)
-      continue;
-    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
-    const found = windows.get(key);
-    if (found && found.time * 1000 >= at)
-      continue;
-    windows.set(key, {
-      ...base,
-      entity: session.tool,
-      type: "app",
-      time: at / 1000,
-      category: "ai-coding",
-      ...projectOf(repo),
-      ...repo.branch ? { branch: repo.branch } : {}
-    });
-  }
-  const activity = [...windows.values()].sort((a, b) => a.time - b.time);
-  beats.push(...activity);
-  const t = session.tokens;
-  const anyTokens = t.input > 0 || t.output > 0 || t.cacheRead > 0 || t.cacheWrite > 0;
-  const last = activity.at(-1);
-  if (anyTokens && last) {
-    last.ai_input_tokens = t.input;
-    last.ai_output_tokens = t.output;
-    last.ai_cache_read_tokens = t.cacheRead;
-    last.ai_cache_write_tokens = t.cacheWrite;
-  }
-  return beats.sort((a, b) => a.time - b.time);
-}
-var MAX_BATCH = 1000;
-async function sendHeartbeats(apiUrl, token, beats) {
-  let accepted = 0;
-  for (let i = 0;i < beats.length; i += MAX_BATCH) {
-    const chunk = beats.slice(i, i + MAX_BATCH);
-    const res = await fetch(`${apiUrl}/api/v1/heartbeats`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(chunk)
-    });
-    if (!res.ok) {
-      throw Object.assign(new Error(`ingest rejected a batch (HTTP ${res.status})`), { accepted, status: res.status });
-    }
-    const body = await res.json().catch(() => ({}));
-    accepted += typeof body.accepted === "number" ? body.accepted : chunk.length;
-  }
-  return { accepted };
-}
-async function revokeDevice(apiUrl, token) {
-  try {
-    const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` }
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-// src/notice.ts
-function sessionNotice(connected, lastLogLine, now = Date.now()) {
-  if (!connected) {
-    return [
-      "Inlinr (time tracking plugin) is installed but this machine is not connected to an Inlinr account, so nothing is being tracked.",
-      "Mention this to the user once, briefly, at a natural point in your first reply, and offer to connect it.",
-      "If they agree, use the inlinr:activate skill."
-    ].join(" ");
-  }
-  const m = lastLogLine?.match(/^(\S+) .*HTTP 401/);
-  if (m?.[1]) {
-    const at = Date.parse(m[1]);
-    if (Number.isFinite(at) && now - at < 48 * 3600 * 1000) {
-      return [
-        "Inlinr (time tracking plugin) is installed but inlinr.com refused this machine's token: the device was probably removed from the account, so nothing is being tracked.",
-        "Mention this to the user once, briefly, and offer to reconnect it with the inlinr:activate skill."
-      ].join(" ");
-    }
-  }
-  return null;
-}
-
-// src/report.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join4 } from "node:path";
-var RESEND_AFTER_MS = 24 * 60 * 60 * 1000;
-var FORGET_AFTER_MS = 7 * RESEND_AFTER_MS;
-var TIMEOUT_MS = 3000;
-function reportsEnabled(env, configToml) {
-  const off = (v) => v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
-  if (env.INLINR_ERROR_REPORTS === "0")
-    return false;
-  if (off(env.DISABLE_ERROR_REPORTING) || off(env.DISABLE_TELEMETRY) || off(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)) {
-    return false;
-  }
-  return !(configToml && /^\s*error_reports\s*=\s*false\b/m.test(configToml));
-}
-function isServersOrNetworks(err) {
-  if (!(err instanceof Error))
-    return false;
-  if (typeof err.status === "number")
-    return true;
-  if (err.name === "AbortError" || err.name === "TimeoutError")
-    return true;
-  if (err instanceof TypeError && err.message === "fetch failed")
-    return true;
-  const code = err.code;
-  return typeof code === "string" && /^(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_)/.test(code);
-}
-function scrubHome(text, home = homedir3()) {
-  if (home.length < 3)
-    return text;
-  return text.split(home).join("~").split(home.replace(/\\/g, "/")).join("~");
-}
-function signature(context, message) {
-  return `${context}
-${message.replace(/\d{4,}/g, "#")}`;
-}
-function readSent(path) {
-  try {
-    const raw = JSON.parse(readFileSync4(path, "utf8"));
-    return raw && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
-}
-async function reportError(context, err, opts) {
-  try {
-    if (!opts.enabled || isServersOrNetworks(err))
-      return;
-    const error = err instanceof Error ? err : new Error(String(err));
-    const message = scrubHome(error.message);
-    const key = signature(context, message);
-    const t = (opts.now ?? Date.now)();
-    const sent = readSent(opts.statePath);
-    const last = sent[key];
-    if (last !== undefined && t - last < RESEND_AFTER_MS)
-      return;
-    sent[key] = t;
-    for (const [k, at] of Object.entries(sent)) {
-      if (t - at > FORGET_AFTER_MS)
-        delete sent[k];
-    }
-    try {
-      mkdirSync3(join4(opts.statePath, ".."), { recursive: true });
-      writeFileSync3(opts.statePath, JSON.stringify(sent), { mode: 384 });
-    } catch {}
-    const body = JSON.stringify({
-      source: "claude-code",
-      version: `claude-code-inlinr/${opts.version}`,
-      platform: `${process.platform}-${process.arch}`,
-      editor: "claude-code",
-      context,
-      message,
-      stack: error.stack ? scrubHome(error.stack) : null
-    });
-    const send = opts.send ?? ((url, b) => fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: b,
-      signal: AbortSignal.timeout(TIMEOUT_MS)
-    }));
-    await send(`${opts.apiUrl}/api/v1/plugin-errors`, body);
-  } catch {}
-}
-
-// src/index.ts
-var VERSION = "0.6.0";
-function claudeProjectsDir() {
-  const override = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join5(override || join5(homedir4(), ".claude"), "projects");
-}
-function transcripts() {
-  const root = claudeProjectsDir();
-  const out = [];
-  const walk = (dir, subagent) => {
-    let entries;
-    try {
-      entries = readdirSync2(dir, { withFileTypes: true, encoding: "utf8" });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = join5(dir, e.name);
-      if (e.isDirectory()) {
-        if (e.name === "tool-results")
-          continue;
-        walk(full, subagent || e.name === "subagents");
-        continue;
-      }
-      if (!e.name.endsWith(".jsonl"))
-        continue;
-      try {
-        const st = statSync3(full);
-        out.push({
-          tool: "claude-code",
-          key: full,
-          path: full,
-          size: st.size,
-          mtime: st.mtime,
-          subagent
-        });
-      } catch {}
-    }
-  };
-  walk(root, false);
-  return out;
-}
-function sessionFiles() {
-  return [...transcripts(), ...codexFiles(), ...geminiFiles()];
-}
-function readFrom(path, offset, size) {
-  const length = size - offset;
-  if (length <= 0)
-    return { text: "", end: offset };
-  const buf = Buffer.alloc(length);
-  const fd = openSync2(path, "r");
-  let read = 0;
-  try {
-    read = readSync(fd, buf, 0, length, offset);
-  } finally {
-    closeSync2(fd);
-  }
-  const last = buf.subarray(0, read).lastIndexOf(10);
-  if (last < 0)
-    return { text: "", end: offset };
-  return {
-    text: buf.subarray(0, last + 1).toString("utf8"),
-    end: offset + last + 1
-  };
-}
+// src/repo.ts
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync3 } from "node:fs";
+import { basename as basename2, dirname as dirname2 } from "node:path";
 function git(cwd, args) {
   try {
-    return execFileSync("git", args, {
+    return execFileSync2("git", args, {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -1159,7 +1391,7 @@ function repoResolver() {
   };
   return (dir) => {
     let d = dir;
-    while (d && !existsSync2(d)) {
+    while (d && !existsSync3(d)) {
       const up = dirname2(d);
       if (up === d)
         return null;
@@ -1175,168 +1407,8 @@ function repoResolver() {
     return repo;
   };
 }
-function openBrowser(url) {
-  const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
-  try {
-    execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
-  } catch {}
-}
-async function activate(config, cloud = false, editor = "claude-code") {
-  const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform, editor);
-  openBrowser(init.verification_uri_complete);
-  console.log("");
-  console.log(cloud ? "  Approve Claude Code cloud in the browser tab that just opened." : "  Approve this machine in the browser tab that just opened.");
-  console.log(`  If it did not open: ${init.verification_uri_complete}`);
-  console.log("");
-  console.log(`  The code, if it asks: ${init.user_code}`);
-  const deadline = Date.now() + init.expires_in * 1000;
-  const wait = Math.max(1, init.interval) * 1000;
-  let delay = 800;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, delay));
-    delay = wait;
-    const result = await pollDeviceToken(config.apiUrl, init.device_code);
-    if (result.status === "ok") {
-      if (cloud) {
-        printCloudSetup(result.token);
-        return 0;
-      }
-      save({
-        ...config,
-        deviceToken: result.token,
-        lastParsedAt: new Date().toISOString(),
-        files: {}
-      });
-      console.log("  Activated. Tracking starts now.");
-      return 0;
-    }
-    if (result.status === "denied") {
-      console.error(`  Activation failed: ${result.error}`);
-      return 1;
-    }
-  }
-  console.error("  That code expired. Run activation again.");
-  return 1;
-}
-var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
-function cloudHook(throttle) {
-  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
-  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
-}
-function printCloudSetup(deviceToken) {
-  const hook = (throttle) => [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: cloudHook(throttle),
-          timeout: 20,
-          async: true
-        }
-      ]
-    }
-  ];
-  const settings = {
-    hooks: {
-      SessionStart: hook(0),
-      UserPromptSubmit: hook(120),
-      PostToolUse: hook(120),
-      SubagentStop: hook(120),
-      Stop: hook(0),
-      SessionEnd: hook(0)
-    }
-  };
-  console.log("");
-  console.log("  Approved. Three steps in Claude Code on the web:");
-  console.log("");
-  console.log("  1. In the cloud environment's settings, add this environment variable:");
-  console.log("");
-  console.log(`     INLINR_TOKEN=${deviceToken}`);
-  console.log("");
-  console.log("  2. In the same settings, set network access to Custom, add inlinr.com,");
-  console.log("     and keep the default list of package managers.");
-  console.log("");
-  console.log("  3. Merge this into .claude/settings.json in each repository you work on:");
-  console.log("");
-  console.log(JSON.stringify(settings, null, 2).split(`
-`).map((l) => `     ${l}`).join(`
-`));
-  console.log("");
-  console.log("  Keep the token private: anyone using the environment can read it.");
-  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
-}
-async function status(config) {
-  const all = sessionFiles();
-  const pending = all.filter((t) => hasNew(config, t)).length;
-  const count = (tool) => all.filter((t) => t.tool === tool).length;
-  const connected = token(config) ? config.deviceToken ? "connected" : "connected (INLINR_TOKEN)" : "not connected — run /inlinr:activate";
-  console.log("");
-  console.log(`  Plugin      ${VERSION}`);
-  console.log(`  Machine     ${hostname()}`);
-  console.log(`  Account     ${connected}`);
-  console.log(`  Server      ${config.apiUrl}`);
-  console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
-  console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
-  console.log(`              Claude Code ${count("claude-code")}, Codex ${count("codex")}, Gemini CLI ${count("gemini-cli")}`);
-  if (token(config) && all.length === 0) {
-    console.log("");
-    console.log("  No transcripts found. Claude Code writes them under ~/.claude/projects,");
-    console.log("  so this is expected on a machine where you have not used it yet.");
-  }
-  const log = join5(configDir(), "claude-code.log");
-  if (existsSync2(log)) {
-    console.log("");
-    console.log(`  Errors have been logged to ${log}`);
-  }
-  console.log("");
-  return 0;
-}
-function lastLogLine() {
-  try {
-    const lines = readFileSync5(join5(configDir(), "claude-code.log"), "utf8").trim().split(`
-`);
-    return lines[lines.length - 1] || null;
-  } catch {
-    return null;
-  }
-}
-function sessionCheck(config) {
-  if (process.env.CLAUDE_CODE_REMOTE === "true")
-    return 0;
-  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
-  if (notice) {
-    console.log(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "SessionStart",
-        additionalContext: notice
-      }
-    }));
-  }
-  return 0;
-}
-async function deactivate(config) {
-  if (!config.deviceToken) {
-    console.log(token(config) ? "  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking." : "  This machine is not connected.");
-    return 0;
-  }
-  const revoked = await revokeDevice(config.apiUrl, config.deviceToken);
-  save({
-    ...config,
-    deviceToken: "",
-    lastParsedAt: null,
-    lastSyncAt: null,
-    files: {}
-  });
-  console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
-  return 0;
-}
-function hasNew(config, t) {
-  const state = config.files[t.key];
-  if (state)
-    return t.size !== state.offset;
-  const since = config.lastParsedAt ? Date.parse(config.lastParsedAt) : Number.NaN;
-  return Number.isNaN(since) || t.mtime.getTime() > since;
-}
+
+// src/commands/sync.ts
 async function sync(config, throttleSeconds) {
   const deviceToken = token(config);
   if (!deviceToken) {
@@ -1419,22 +1491,8 @@ async function sync(config, throttleSeconds) {
   });
   return 0;
 }
-var self = () => resolve2(process.argv[1] ?? "");
-function setup(tool) {
-  if (tool !== "codex" && tool !== "gemini-cli") {
-    console.error("  Usage: setup codex | setup gemini-cli");
-    return 2;
-  }
-  const script = installStandalone(self());
-  const result = tool === "codex" ? setupCodex(process.execPath, script) : setupGemini(process.execPath, script);
-  console.log("");
-  console.log(`  ${result.message}`);
-  if (result.ok) {
-    console.log(`  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to Inlinr after each turn.`);
-  }
-  console.log("");
-  return result.ok ? 0 : 1;
-}
+
+// src/index.ts
 async function main() {
   const args = process.argv.slice(2);
   const config = load();
@@ -1485,26 +1543,6 @@ async function main() {
     release();
   }
 }
-function logFailure(err) {
-  try {
-    const line = `${new Date().toISOString()} ${err?.message ?? String(err)}
-`;
-    mkdirSync4(configDir(), { recursive: true });
-    appendFileSync(join5(configDir(), "claude-code.log"), line, "utf8");
-  } catch {}
-}
-async function reportFailure(err) {
-  let configToml = null;
-  try {
-    configToml = readFileSync5(join5(configDir(), "config.toml"), "utf8");
-  } catch {}
-  await reportError("sync", err, {
-    apiUrl: load().apiUrl,
-    version: VERSION,
-    enabled: reportsEnabled(process.env, configToml),
-    statePath: join5(configDir(), "error-reports-claude-code.json")
-  });
-}
 var INTERACTIVE = new Set(["activate", "deactivate", "status", "setup"]);
 main().then((code) => process.exit(code)).catch(async (err) => {
   logFailure(err);
@@ -1516,6 +1554,3 @@ main().then((code) => process.exit(code)).catch(async (err) => {
     await reportFailure(err);
   process.exit(0);
 });
-export {
-  cloudHook
-};
