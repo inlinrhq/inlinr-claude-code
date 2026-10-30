@@ -33,6 +33,14 @@ That prints a link, you approve it in the browser, and it saves a device token
 in `~/.inlinr`. That covers the machine: every session, every project, the
 terminal and the desktop app alike. There is nothing else to install.
 
+**One connection per machine.** Since 0.7.0 the token is saved in
+`~/.inlinr/config.toml`, where the inlinr VS Code extension and the `inlinr`
+command read theirs. Connect any one of them and the others are connected:
+with the extension already signed in, this plugin tracks without
+`/inlinr:activate`, from the moment it first runs. A machine activated by an
+earlier release keeps the token it saved in `~/.inlinr/claude-code.json` until
+you activate again, which moves it to the shared file.
+
 **Tracking starts when you activate, not before.** Claude Code keeps every
 transcript it has ever written, so a first sync could otherwise upload months
 of past work — attributed to projects you may never have wanted tracked — the
@@ -166,6 +174,11 @@ in `~/.claude/settings.json`:
 Removes the local token and revokes the device on inlinr.com, so tracking stops
 from this machine. Your history is untouched — this disconnects a machine, it
 does not delete anything. `/inlinr:activate` connects it again.
+
+The connection is the machine's: the VS Code extension and the `inlinr`
+command on it are signed out too, and signing out from either of them stops
+this plugin as well. When you sign in again, tracking starts from that moment;
+what was done while signed out is not sent.
 
 **If the plugin seems stuck on an old version**, see [Updating](#updating).
 

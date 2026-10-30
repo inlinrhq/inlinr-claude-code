@@ -15,8 +15,10 @@ assistant's parser lives (inlinr-cli's CLAUDE.md says the same).
 Sibling repos:
 - `inlinrhq/inlinr-web` — server. Source of truth for the wire contract below.
 - `inlinrhq/inlinr-cli` — the binary the VS Code extension uses. Shares the
-  `~/.inlinr/` folder only: this plugin reads `config.toml` for
-  `error_reports` under `[behavior]`, nothing else.
+  machine's connection: `[auth] device_token` in `~/.inlinr/config.toml` is
+  read and written by both (`machineToken` / `saveMachineToken` in
+  `src/config.ts`, one line edited, the rest of the file kept), and
+  `error_reports` under `[behavior]` is read here.
 - `inlinrhq/inlinr-vscode` — the editor extension. Independent of this plugin.
 
 ## Layout
@@ -38,7 +40,7 @@ src/agents/gemini.ts  # Gemini CLI sessions: messages rewritten by id, diffStat 
 src/agents/sources.ts # where each assistant's files are, and their state keys
 src/agents/setup.ts   # `setup codex|gemini-cli`: the hook for a machine without Claude Code
 src/api.ts        # device flow, heartbeat batches, revoke
-src/config.ts     # ~/.inlinr/claude-code.json (token, read positions)
+src/config.ts     # ~/.inlinr/claude-code.json (read positions), the machine's token in config.toml
 src/notice.ts     # what SessionStart tells Claude when the machine is not connected
 src/report.ts     # own failures → POST /api/v1/plugin-errors
 dist/index.js     # the committed bundle Claude Code actually runs
@@ -54,6 +56,12 @@ dist/index.js     # the committed bundle Claude Code actually runs
 - Each transcript keeps its own read offset in `claude-code.json`;
   `lastParsedAt` is set once at activation and never moved, so nothing from
   before activation is sent.
+- One token per machine. `tokenSource`: this file's `deviceToken` (saved by
+  a release before 0.7.0; activating again empties it), then `config.toml`'s,
+  then `INLINR_TOKEN`. Activation writes `config.toml`; deactivation revokes
+  and clears whichever is in use. `tokenTag` (16 hex of its SHA-256) records
+  which token the read positions belong to: when another appears (a sign-out
+  and sign-in from the CLI or VS Code), tracking starts over from then.
 - Failures go to `~/.inlinr/claude-code.log` (shown by `/inlinr:status`) and,
   once a day per error, to Admin → Errors. Off with `error_reports = false`,
   `INLINR_ERROR_REPORTS=0`, or Claude Code's `DISABLE_ERROR_REPORTING` /

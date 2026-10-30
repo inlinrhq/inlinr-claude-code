@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { hostname } from "node:os";
 import { pollDeviceToken, startDeviceFlow } from "../api";
-import { type Config, save } from "../config";
+import { type Config, save, saveMachineToken, tokenTag } from "../config";
 import type { AiTool } from "../transcript";
 import { printCloudSetup } from "./cloud";
 
@@ -84,13 +84,21 @@ export async function activate(
       // asked for: it is months of past work, attributed to projects they
       // may not have wanted tracked, in one enormous request. A tracker
       // starts tracking when you turn it on.
+      //
+      // The token goes to config.toml, the machine's connection: the inlinr
+      // CLI and the VS Code extension on this machine send with it too.
+      saveMachineToken(result.token);
       save({
         ...config,
-        deviceToken: result.token,
+        deviceToken: "",
+        tokenTag: tokenTag(result.token),
         lastParsedAt: new Date().toISOString(),
         files: {},
       });
       console.log("  Activated. Tracking starts now.");
+      console.log(
+        "  The inlinr VS Code extension and CLI on this machine use this connection too.",
+      );
       return 0;
     }
     if (result.status === "denied") {

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
-import { type Config, token } from "../config";
+import { type Config, token, tokenSource } from "../config";
 import { logPath } from "../failure";
 import { hasNew, sessionFiles } from "../sessions";
 import type { AiTool } from "../transcript";
@@ -19,11 +19,14 @@ export async function status(config: Config): Promise<number> {
   const all = sessionFiles();
   const pending = all.filter((t) => hasNew(config, t)).length;
   const count = (tool: AiTool) => all.filter((t) => t.tool === tool).length;
-  const connected = token(config)
-    ? config.deviceToken
-      ? "connected"
-      : "connected (INLINR_TOKEN)"
-    : "not connected — run /inlinr:activate";
+  const source = tokenSource(config);
+  const connected = !source
+    ? "not connected — run /inlinr:activate"
+    : source.from === "machine"
+      ? "connected (this machine's, shared with the inlinr CLI and VS Code)"
+      : source.from === "plugin"
+        ? "connected (this plugin's own; /inlinr:activate shares it)"
+        : "connected (INLINR_TOKEN)";
 
   console.log("");
   console.log(`  Plugin      ${VERSION}`);

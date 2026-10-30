@@ -7,7 +7,7 @@ import {
   parseGemini,
 } from "../agents";
 import { sendHeartbeats, toHeartbeats } from "../api";
-import { type Config, save, token } from "../config";
+import { type Config, save, token, tokenTag } from "../config";
 import { repoResolver } from "../repo";
 import { hasNew, readFrom, sessionFiles } from "../sessions";
 import { isEmpty, parseTranscript, type Session } from "../transcript";
@@ -24,14 +24,21 @@ export async function sync(
     return 0;
   }
 
-  if (!config.lastParsedAt) {
-    // A token from the environment, never activated here: tracking starts
-    // now, for the same reason it does on activation. In a cloud session
-    // the SessionStart hook gets here before any work has happened.
+  const tag = tokenTag(deviceToken);
+  const otherToken = config.tokenTag != null && config.tokenTag !== tag;
+  if (!config.lastParsedAt || otherToken) {
+    // A token never activated by this plugin: from the environment, or the
+    // machine's, saved by the CLI or VS Code. Tracking starts now, for the
+    // same reason it does on activation. In a cloud session the
+    // SessionStart hook gets here before any work has happened. A token
+    // that changed (signed out, then in again elsewhere) starts over too:
+    // what was done while signed out is not sent afterwards.
     save({
       ...config,
+      tokenTag: tag,
       lastParsedAt: new Date().toISOString(),
       lastSyncAt: new Date().toISOString(),
+      files: otherToken ? {} : config.files,
     });
     return 0;
   }
@@ -111,6 +118,8 @@ export async function sync(
 
   save({
     ...config,
+    // Recorded on the first sync of a release that knows the tag.
+    tokenTag: tag,
     files,
     lastSyncAt: new Date().toISOString(),
   });
