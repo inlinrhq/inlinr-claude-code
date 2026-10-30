@@ -31,3 +31,18 @@ export function sessionNotice(
   }
   return null;
 }
+
+/**
+ * Said once, at the first session tracked with a connection this plugin did
+ * not make: the inlinr extension or CLI signed the machine in, and this
+ * plugin follows. Tracking somebody's assistant sessions because another
+ * plugin was connected is what they asked for, but not something to do
+ * without a word.
+ */
+export function sharedConnectionNotice(): string {
+  return [
+    "inlinr (time tracking plugin) now tracks Claude Code sessions on this machine, using the connection the inlinr extension or CLI made here (one connection per machine).",
+    "Mention this to the user once, briefly, in your first reply.",
+    "If they do not want Claude Code tracked here, run the inlinr:deactivate skill and choose to pause; the extension keeps tracking.",
+  ].join(" ");
+}

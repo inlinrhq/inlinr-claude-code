@@ -33,6 +33,24 @@ That prints a link, you approve it in the browser, and it saves a device token
 in `~/.inlinr`. That covers the machine: every session, every project, the
 terminal and the desktop app alike. There is nothing else to install.
 
+**One connection per machine.** Since 0.7.0 the token is saved in
+`~/.inlinr/config.toml`, where the inlinr VS Code extension and the `inlinr`
+command read theirs. Connect any one of them and the others are connected:
+with the extension already signed in, this plugin tracks without
+`/inlinr:activate`, from the moment it first runs, and Claude says so once in
+that first session. A machine activated by an earlier release has its token
+moved from `~/.inlinr/claude-code.json` to the shared file at the first sync
+(when that file has none), so the extension uses it too.
+
+On a machine already connected, `/inlinr:activate` does not ask for a new
+approval: it keeps the connection and resumes tracking. To move the machine to
+another inlinr account, ask for activation with `--replace`; every plugin on
+the machine moves with it, and the old device is revoked.
+
+A machine where this plugin was deactivated with an earlier release stays off
+for Claude Code even if the extension is signed in: `/inlinr:activate` turns it
+back on.
+
 **Tracking starts when you activate, not before.** Claude Code keeps every
 transcript it has ever written, so a first sync could otherwise upload months
 of past work — attributed to projects you may never have wanted tracked — the
@@ -49,7 +67,7 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 |---|---|
 | `/inlinr:activate` | Connect this machine. Opens a page, you approve it there. |
 | `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
-| `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
+| `/inlinr:deactivate` | Pause Claude Code tracking here, or disconnect the machine (asks which). |
 | `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
 | `/inlinr:upgrade <package> [version]` | Upgrade an npm dependency: reads its breaking changes, migration guides and advisories from inlinr, finds where the code uses it, upgrades, fixes and runs your checks. Only the package name and the two versions are sent. |
 
@@ -163,9 +181,18 @@ in `~/.claude/settings.json`:
 /inlinr:deactivate
 ```
 
-Removes the local token and revokes the device on inlinr.com, so tracking stops
-from this machine. Your history is untouched — this disconnects a machine, it
-does not delete anything. `/inlinr:activate` connects it again.
+Claude asks which of two you mean:
+
+- **Pause** (`deactivate --pause`): Claude Code, Codex and Gemini CLI are no
+  longer tracked on this machine. The inlinr extension and the `inlinr`
+  command keep the machine's connection; nothing is revoked.
+- **Disconnect the machine** (`deactivate --machine`): the token is revoked on
+  inlinr.com and cleared, and every inlinr plugin on the machine stops.
+  Signing out from the extension or the `inlinr` command does the same.
+
+Your history is untouched either way. `/inlinr:activate` resumes after a pause
+or connects the machine again; tracking starts from that moment, and what was
+done while paused or signed out is not sent.
 
 **If the plugin seems stuck on an old version**, see [Updating](#updating).
 

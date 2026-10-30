@@ -42,10 +42,21 @@ async function main(): Promise<number> {
       console.error("  --editor takes claude-code, codex or gemini-cli.");
       return 2;
     }
-    return activate(config, args[1] === "--cloud", editor);
+    return activate(config, {
+      cloud: args[1] === "--cloud",
+      replace: args.includes("--replace"),
+      editor,
+    });
   }
   if (args[0] === "setup") return setup(args[1]);
-  if (args[0] === "deactivate") return deactivate(config);
+  if (args[0] === "deactivate") {
+    const mode = args.includes("--machine")
+      ? "machine"
+      : args.includes("--pause")
+        ? "pause"
+        : null;
+    return deactivate(config, mode);
+  }
   if (args[0] === "status") return status(config);
   if (args[0] === "session-check") return sessionCheck(config);
   if (args[0] === "--version") {

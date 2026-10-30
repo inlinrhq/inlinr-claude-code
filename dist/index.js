@@ -14,6 +14,7 @@ import {
 import { join as join3 } from "node:path";
 
 // src/config.ts
+import { createHash } from "node:crypto";
 import {
   closeSync,
   mkdirSync,
@@ -43,19 +44,23 @@ function trustedApiUrl(raw) {
 }
 function configDir() {
   const override = process.env.INLINR_HOME?.trim();
-  if (override)
-    return override;
+  if (override && false)
+    ;
   return join(homedir(), ".inlinr");
 }
 var configPath = () => join(configDir(), "claude-code.json");
 function load() {
   try {
     const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+    const deviceToken = typeof raw.deviceToken === "string" ? raw.deviceToken : "";
+    const lastParsedAt = typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null;
     return {
-      deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
+      deviceToken,
       apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
-      lastParsedAt: typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
+      lastParsedAt,
       lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
+      tokenTag: typeof raw.tokenTag === "string" ? raw.tokenTag : null,
+      paused: typeof raw.paused === "boolean" ? raw.paused : !deviceToken && !lastParsedAt,
       files: raw.files && typeof raw.files === "object" ? raw.files : {}
     };
   } catch {
@@ -64,14 +69,108 @@ function load() {
       apiUrl: trustedApiUrl(process.env.INLINR_API_URL),
       lastParsedAt: null,
       lastSyncAt: null,
+      tokenTag: null,
+      paused: false,
       files: {}
     };
   }
 }
 function token(config) {
-  return config.deviceToken || process.env.INLINR_TOKEN?.trim() || "";
+  return tokenSource(config)?.token ?? "";
 }
-function save(config) {
+function tokenSource(config) {
+  if (config.paused)
+    return null;
+  return connection(config);
+}
+function connection(config) {
+  if (config.deviceToken)
+    return { token: config.deviceToken, from: "plugin" };
+  const machine = machineToken();
+  if (machine)
+    return { token: machine, from: "machine" };
+  const env = process.env.INLINR_TOKEN?.trim();
+  if (env)
+    return { token: env, from: "env" };
+  return null;
+}
+function tokenTag(value) {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+var TOKEN_SHAPE = /^in_d_[A-Za-z0-9_-]{16,128}$/;
+var machinePath = () => join(configDir(), "config.toml");
+function authTable(text) {
+  const header = /^\s*\[auth\]\s*(#.*)?$/m.exec(text);
+  if (!header)
+    return null;
+  const start = header.index + header[0].length;
+  const next = /^\s*\[/m.exec(text.slice(start));
+  return { start, end: next ? start + next.index : text.length };
+}
+var TOKEN_LINE = /^\s*device_token\s*=\s*(["'])([^"'\n]*)\1[^\n]*$/m;
+function machineToken() {
+  let text;
+  try {
+    text = readFileSync(machinePath(), "utf8");
+  } catch {
+    return "";
+  }
+  return readMachineToken(text);
+}
+function readMachineToken(text) {
+  const table = authTable(text);
+  if (!table)
+    return "";
+  const value = TOKEN_LINE.exec(text.slice(table.start, table.end))?.[2] ?? "";
+  return TOKEN_SHAPE.test(value) ? value : "";
+}
+function withMachineToken(text, value) {
+  if (value && !TOKEN_SHAPE.test(value)) {
+    throw new Error("Refusing to save a token that is not an inlinr token.");
+  }
+  const line = `device_token = "${value}"`;
+  const table = authTable(text);
+  if (!table) {
+    if (!value)
+      return text;
+    const sep = text === "" || text.endsWith(`
+
+`) ? "" : text.endsWith(`
+`) ? `
+` : `
+
+`;
+    return `${text}${sep}[auth]
+  ${line}
+`;
+  }
+  const body = text.slice(table.start, table.end);
+  const found = TOKEN_LINE.exec(body);
+  const next = found ? body.replace(TOKEN_LINE, (m) => m.replace(/device_token[\s\S]*$/, line)) : `
+  ${line}${body}`;
+  return text.slice(0, table.start) + next + text.slice(table.end);
+}
+function saveMachineToken(value) {
+  let text = "";
+  try {
+    text = readFileSync(machinePath(), "utf8");
+  } catch {}
+  const next = withMachineToken(text, value);
+  if (next === text)
+    return;
+  mkdirSync(configDir(), { recursive: true, mode: 448 });
+  const path = machinePath();
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, next, { encoding: "utf8", mode: 384 });
+  replaceFile(tmp, path);
+}
+function save(config, token = "keep") {
+  if (token === "keep") {
+    config = {
+      ...config,
+      deviceToken: diskDeviceToken() ?? config.deviceToken
+    };
+  }
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
   const path = configPath();
@@ -81,7 +180,33 @@ function save(config) {
     encoding: "utf8",
     mode: 384
   });
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
+}
+var BUSY = new Set(["EPERM", "EACCES", "EBUSY"]);
+function replaceFile(tmp, path, rename = renameSync) {
+  for (let attempt = 0;; attempt++) {
+    try {
+      rename(tmp, path);
+      return;
+    } catch (err) {
+      const code = err.code ?? "";
+      if (!BUSY.has(code) || attempt >= 7) {
+        try {
+          unlinkSync(tmp);
+        } catch {}
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 << Math.min(attempt, 3));
+    }
+  }
+}
+function diskDeviceToken() {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+    return typeof raw.deviceToken === "string" ? raw.deviceToken : "";
+  } catch {
+    return null;
+  }
 }
 var SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
 function acquireSyncLock(now = Date.now()) {
@@ -476,6 +601,19 @@ async function revokeDevice(apiUrl, token) {
     return false;
   }
 }
+async function checkToken(apiUrl, token) {
+  try {
+    const res = await fetch(`${apiUrl}/api/v1/me/today`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (res.status === 401)
+      return "refused";
+    return res.ok ? "ok" : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
 
 // src/commands/cloud.ts
 var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
@@ -533,7 +671,36 @@ function openBrowser(url) {
     execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
   } catch {}
 }
-async function activate(config, cloud = false, editor = "claude-code") {
+async function activate(config, {
+  cloud = false,
+  replace = false,
+  editor = "claude-code"
+} = {}) {
+  const current = cloud ? null : connection(config);
+  if (current && current.from !== "env" && !replace) {
+    const state = await checkToken(config.apiUrl, current.token);
+    if (state === "unreachable") {
+      console.error("  inlinr.com could not be reached to check this machine's connection. Try again when online.");
+      return 1;
+    }
+    if (state === "ok") {
+      if (config.paused || !config.lastParsedAt) {
+        save({
+          ...config,
+          paused: false,
+          tokenTag: tokenTag(current.token),
+          lastParsedAt: new Date().toISOString(),
+          lastSyncAt: null,
+          files: {}
+        });
+        console.log("  This machine is already connected. Tracking starts now.");
+      } else {
+        console.log("  This machine is already connected and tracked.");
+      }
+      console.log("  To connect it to another inlinr account, run activation with --replace.");
+      return 0;
+    }
+  }
   const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform, editor);
   openBrowser(init.verification_uri_complete);
   console.log("");
@@ -553,13 +720,21 @@ async function activate(config, cloud = false, editor = "claude-code") {
         printCloudSetup(result.token);
         return 0;
       }
+      const previous = new Set([config.deviceToken, machineToken()].filter(Boolean));
+      saveMachineToken(result.token);
       save({
         ...config,
-        deviceToken: result.token,
+        deviceToken: "",
+        tokenTag: tokenTag(result.token),
+        paused: false,
         lastParsedAt: new Date().toISOString(),
         files: {}
-      });
+      }, "set");
+      previous.delete(result.token);
+      for (const old of previous)
+        await revokeDevice(config.apiUrl, old);
       console.log("  Activated. Tracking starts now.");
+      console.log("  The inlinr VS Code extension and CLI on this machine use this connection too.");
       return 0;
     }
     if (result.status === "denied") {
@@ -572,20 +747,48 @@ async function activate(config, cloud = false, editor = "claude-code") {
 }
 
 // src/commands/deactivate.ts
-async function deactivate(config) {
-  if (!config.deviceToken) {
-    console.log(token(config) ? "  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking." : "  This machine is not connected.");
+async function deactivate(config, mode) {
+  const source = connection(config);
+  if (!source) {
+    console.log("  This machine is not connected.");
     return 0;
   }
-  const revoked = await revokeDevice(config.apiUrl, config.deviceToken);
+  if (source.from === "env") {
+    console.log("  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking.");
+    return 0;
+  }
+  if (!mode) {
+    console.log("  Two ways to stop, nothing changed yet:");
+    console.log("  --pause    stop tracking Claude Code, Codex and Gemini CLI here; the inlinr extension and CLI keep this machine's connection");
+    console.log("  --machine  disconnect this machine: the token is revoked and every inlinr plugin on it stops");
+    return 0;
+  }
+  if (mode === "pause") {
+    save({ ...config, paused: true, lastParsedAt: null, files: {} });
+    console.log("  Paused. Claude Code, Codex and Gemini CLI are no longer tracked on this machine; /inlinr:activate resumes from that moment.");
+    if (source.from === "machine") {
+      console.log("  The inlinr extension and CLI keep this machine's connection.");
+    }
+    return 0;
+  }
+  const revoked = await revokeDevice(config.apiUrl, source.token);
+  if (machineToken() === source.token)
+    saveMachineToken("");
   save({
     ...config,
     deviceToken: "",
+    tokenTag: null,
+    paused: false,
     lastParsedAt: null,
     lastSyncAt: null,
     files: {}
-  });
+  }, "set");
   console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
+  if (machineToken()) {
+    console.log("  This machine is still connected through the inlinr extension or CLI with another token. Run /inlinr:deactivate --machine again to disconnect it too, or --pause to stop only Claude Code.");
+  } else if (source.from === "machine") {
+    console.log("  The inlinr extension and CLI on this machine shared this connection: they are signed out too.");
+  }
   return 0;
 }
 
@@ -682,7 +885,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.6.1";
+var VERSION = "0.7.0";
 
 // src/failure.ts
 var logPath = () => join5(configDir(), "claude-code.log");
@@ -728,6 +931,13 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
   }
   return null;
 }
+function sharedConnectionNotice() {
+  return [
+    "inlinr (time tracking plugin) now tracks Claude Code sessions on this machine, using the connection the inlinr extension or CLI made here (one connection per machine).",
+    "Mention this to the user once, briefly, in your first reply.",
+    "If they do not want Claude Code tracked here, run the inlinr:deactivate skill and choose to pause; the extension keeps tracking."
+  ].join(" ");
+}
 
 // src/commands/session-check.ts
 function lastLogLine() {
@@ -742,7 +952,10 @@ function lastLogLine() {
 function sessionCheck(config) {
   if (process.env.CLAUDE_CODE_REMOTE === "true")
     return 0;
-  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+  if (config.paused)
+    return 0;
+  const source = tokenSource(config);
+  const notice = source?.from === "machine" && !config.lastParsedAt ? sharedConnectionNotice() : sessionNotice(Boolean(source), lastLogLine());
   if (notice) {
     console.log(JSON.stringify({
       hookSpecificOutput: {
@@ -863,11 +1076,15 @@ async function status(config) {
   const all = sessionFiles();
   const pending = all.filter((t) => hasNew(config, t)).length;
   const count = (tool) => all.filter((t) => t.tool === tool).length;
-  const connected = token(config) ? config.deviceToken ? "connected" : "connected (INLINR_TOKEN)" : "not connected — run /inlinr:activate";
+  const source = tokenSource(config);
+  const connected = config.paused ? "paused on this machine — /inlinr:activate resumes" : !source ? "not connected — run /inlinr:activate" : source.from === "machine" ? "connected (this machine's, shared with the inlinr CLI and VS Code)" : source.from === "plugin" ? "connected (this plugin's own; /inlinr:activate shares it)" : "connected (INLINR_TOKEN)";
   console.log("");
   console.log(`  Plugin      ${VERSION}`);
   console.log(`  Machine     ${hostname2()}`);
   console.log(`  Account     ${connected}`);
+  if (source?.from === "plugin" && machineToken() && machineToken() !== source.token) {
+    console.log("              the inlinr extension and CLI here use another connection (two devices, maybe two accounts)");
+  }
   console.log(`  Server      ${config.apiUrl}`);
   console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
   console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
@@ -1410,15 +1627,27 @@ function repoResolver() {
 
 // src/commands/sync.ts
 async function sync(config, throttleSeconds) {
-  const deviceToken = token(config);
+  const source = tokenSource(config);
+  const deviceToken = source?.token ?? "";
   if (!deviceToken) {
     return 0;
   }
-  if (!config.lastParsedAt) {
+  if (source?.from === "plugin" && !machineToken()) {
+    try {
+      saveMachineToken(deviceToken);
+      config = { ...config, deviceToken: "" };
+      save(config, "set");
+    } catch {}
+  }
+  const tag = tokenTag(deviceToken);
+  const otherToken = config.tokenTag != null && config.tokenTag !== tag;
+  if (!config.lastParsedAt || otherToken) {
     save({
       ...config,
+      tokenTag: tag,
       lastParsedAt: new Date().toISOString(),
-      lastSyncAt: new Date().toISOString()
+      lastSyncAt: new Date().toISOString(),
+      files: otherToken ? {} : config.files
     });
     return 0;
   }
@@ -1486,6 +1715,7 @@ async function sync(config, throttleSeconds) {
   }
   save({
     ...config,
+    tokenTag: tag,
     files,
     lastSyncAt: new Date().toISOString()
   });
@@ -1503,12 +1733,18 @@ async function main() {
       console.error("  --editor takes claude-code, codex or gemini-cli.");
       return 2;
     }
-    return activate(config, args[1] === "--cloud", editor);
+    return activate(config, {
+      cloud: args[1] === "--cloud",
+      replace: args.includes("--replace"),
+      editor
+    });
   }
   if (args[0] === "setup")
     return setup(args[1]);
-  if (args[0] === "deactivate")
-    return deactivate(config);
+  if (args[0] === "deactivate") {
+    const mode = args.includes("--machine") ? "machine" : args.includes("--pause") ? "pause" : null;
+    return deactivate(config, mode);
+  }
   if (args[0] === "status")
     return status(config);
   if (args[0] === "session-check")

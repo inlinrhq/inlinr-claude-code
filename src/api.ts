@@ -345,3 +345,24 @@ export async function revokeDevice(
     return false;
   }
 }
+
+/**
+ * Whether inlinr.com still accepts a token: "ok", "refused" (401, the device
+ * was revoked) or "unreachable". Asks the smallest call a device token can
+ * make, today's total, and reads nothing from it.
+ */
+export async function checkToken(
+  apiUrl: string,
+  token: string,
+): Promise<"ok" | "refused" | "unreachable"> {
+  try {
+    const res = await fetch(`${apiUrl}/api/v1/me/today`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 401) return "refused";
+    return res.ok ? "ok" : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
