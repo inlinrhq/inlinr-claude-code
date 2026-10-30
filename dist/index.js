@@ -478,52 +478,24 @@ async function revokeDevice(apiUrl, token) {
 }
 
 // src/commands/cloud.ts
-var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
-function cloudHook(throttle) {
-  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
-  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
+function cloudSetupLine(apiUrl, deviceToken) {
+  return `curl -fsSL ${apiUrl}/cloud-setup.sh | sh -s -- ${deviceToken}`;
 }
-function printCloudSetup(deviceToken) {
-  const hook = (throttle) => [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: cloudHook(throttle),
-          timeout: 20,
-          async: true
-        }
-      ]
-    }
-  ];
-  const settings = {
-    hooks: {
-      SessionStart: hook(0),
-      UserPromptSubmit: hook(120),
-      PostToolUse: hook(120),
-      SubagentStop: hook(120),
-      Stop: hook(0),
-      SessionEnd: hook(0)
-    }
-  };
+function printCloudSetup(apiUrl, deviceToken) {
   console.log("");
-  console.log("  Approved. Three steps in Claude Code on the web:");
+  console.log("  Approved. One step in Claude Code on the web, once:");
   console.log("");
-  console.log("  1. In the cloud environment's settings, add this environment variable:");
+  console.log("  Open the cloud environment's settings (claude.ai/code, the gear beside");
+  console.log("  the environment) and paste this line into Setup script:");
   console.log("");
-  console.log(`     INLINR_TOKEN=${deviceToken}`);
+  console.log(`     ${cloudSetupLine(apiUrl, deviceToken)}`);
   console.log("");
-  console.log("  2. In the same settings, set network access to Custom, add inlinr.com,");
-  console.log("     and keep the default list of package managers.");
+  console.log("  If its network access is Custom, add inlinr.com to the allowed domains.");
+  console.log("  Every session in that environment is then tracked, in every repository,");
+  console.log("  and gets new versions of the plugin by itself.");
   console.log("");
-  console.log("  3. Merge this into .claude/settings.json in each repository you work on:");
-  console.log("");
-  console.log(JSON.stringify(settings, null, 2).split(`
-`).map((l) => `     ${l}`).join(`
-`));
-  console.log("");
-  console.log("  Keep the token private: anyone using the environment can read it.");
-  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
+  console.log("  The line holds a token: keep it in the environment's settings, never in");
+  console.log("  a repository. Remove the device from Settings on inlinr.com to revoke it.");
 }
 
 // src/commands/activate.ts
@@ -550,7 +522,11 @@ async function activate(config, cloud = false, editor = "claude-code") {
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
       if (cloud) {
-        printCloudSetup(result.token);
+        if (process.env.CLAUDE_CODE_REMOTE === "true") {
+          save({ ...config, deviceToken: result.token });
+          console.log("  This session is tracked from now on.");
+        }
+        printCloudSetup(config.apiUrl, result.token);
         return 0;
       }
       save({
@@ -682,7 +658,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.6.1";
+var VERSION = "0.7.0";
 
 // src/failure.ts
 var logPath = () => join5(configDir(), "claude-code.log");
@@ -708,7 +684,17 @@ async function reportFailure(err) {
 }
 
 // src/notice.ts
-function sessionNotice(connected, lastLogLine, now = Date.now()) {
+function sessionNotice(connected, lastLogLine, now = Date.now(), cloudScript = null) {
+  if (!connected && cloudScript) {
+    return [
+      "inlinr (time tracking) runs in this Claude Code cloud session but is not connected to an inlinr account, so this session is not tracked.",
+      "Mention this to the user once, briefly, at a natural point in your first reply, and offer to connect it.",
+      `If they agree, run \`${cloudScript} activate --cloud\` in the background, give them the link and code it prints as soon as they appear, and wait for it to finish.`,
+      "Once approved, this session is tracked from then on, and the command prints one line starting with `curl -fsSL`.",
+      "Give the user that line in a code block and tell them to paste it once into this cloud environment's Setup script (claude.ai/code, the gear beside the environment), and to add inlinr.com to its allowed domains if its network access is Custom: every later session is then tracked without asking.",
+      "Never write that line or its token into a file of the repository."
+    ].join(" ");
+  }
   if (!connected) {
     return [
       "inlinr (time tracking plugin) is installed but this machine is not connected to an inlinr account, so nothing is being tracked.",
@@ -740,9 +726,8 @@ function lastLogLine() {
   }
 }
 function sessionCheck(config) {
-  if (process.env.CLAUDE_CODE_REMOTE === "true")
-    return 0;
-  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+  const cloud = process.env.CLAUDE_CODE_REMOTE === "true";
+  const notice = sessionNotice(Boolean(token(config)), lastLogLine(), Date.now(), cloud ? `node "${process.argv[1]}"` : null);
   if (notice) {
     console.log(JSON.stringify({
       hookSpecificOutput: {
