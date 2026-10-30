@@ -44,20 +44,23 @@ function trustedApiUrl(raw) {
 }
 function configDir() {
   const override = process.env.INLINR_HOME?.trim();
-  if (override)
-    return override;
+  if (override && false)
+    ;
   return join(homedir(), ".inlinr");
 }
 var configPath = () => join(configDir(), "claude-code.json");
 function load() {
   try {
     const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+    const deviceToken = typeof raw.deviceToken === "string" ? raw.deviceToken : "";
+    const lastParsedAt = typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null;
     return {
-      deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
+      deviceToken,
       apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
-      lastParsedAt: typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
+      lastParsedAt,
       lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
       tokenTag: typeof raw.tokenTag === "string" ? raw.tokenTag : null,
+      paused: typeof raw.paused === "boolean" ? raw.paused : !deviceToken && !lastParsedAt,
       files: raw.files && typeof raw.files === "object" ? raw.files : {}
     };
   } catch {
@@ -67,6 +70,7 @@ function load() {
       lastParsedAt: null,
       lastSyncAt: null,
       tokenTag: null,
+      paused: false,
       files: {}
     };
   }
@@ -75,6 +79,11 @@ function token(config) {
   return tokenSource(config)?.token ?? "";
 }
 function tokenSource(config) {
+  if (config.paused)
+    return null;
+  return connection(config);
+}
+function connection(config) {
   if (config.deviceToken)
     return { token: config.deviceToken, from: "plugin" };
   const machine = machineToken();
@@ -155,7 +164,13 @@ function saveMachineToken(value) {
   writeFileSync(tmp, next, { encoding: "utf8", mode: 384 });
   renameSync(tmp, path);
 }
-function save(config) {
+function save(config, token = "keep") {
+  if (token === "keep") {
+    config = {
+      ...config,
+      deviceToken: diskDeviceToken() ?? config.deviceToken
+    };
+  }
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
   const path = configPath();
@@ -166,6 +181,14 @@ function save(config) {
     mode: 384
   });
   renameSync(tmp, path);
+}
+function diskDeviceToken() {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+    return typeof raw.deviceToken === "string" ? raw.deviceToken : "";
+  } catch {
+    return null;
+  }
 }
 var SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
 function acquireSyncLock(now = Date.now()) {
@@ -560,6 +583,19 @@ async function revokeDevice(apiUrl, token) {
     return false;
   }
 }
+async function checkToken(apiUrl, token) {
+  try {
+    const res = await fetch(`${apiUrl}/api/v1/me/today`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (res.status === 401)
+      return "refused";
+    return res.ok ? "ok" : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
 
 // src/commands/cloud.ts
 var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
@@ -617,7 +653,36 @@ function openBrowser(url) {
     execFileSync(cmd, args, { stdio: "ignore", timeout: 5000 });
   } catch {}
 }
-async function activate(config, cloud = false, editor = "claude-code") {
+async function activate(config, {
+  cloud = false,
+  replace = false,
+  editor = "claude-code"
+} = {}) {
+  const current = cloud ? null : connection(config);
+  if (current && current.from !== "env" && !replace) {
+    const state = await checkToken(config.apiUrl, current.token);
+    if (state === "unreachable") {
+      console.error("  inlinr.com could not be reached to check this machine's connection. Try again when online.");
+      return 1;
+    }
+    if (state === "ok") {
+      if (config.paused || !config.lastParsedAt) {
+        save({
+          ...config,
+          paused: false,
+          tokenTag: tokenTag(current.token),
+          lastParsedAt: new Date().toISOString(),
+          lastSyncAt: null,
+          files: {}
+        });
+        console.log("  This machine is already connected. Tracking starts now.");
+      } else {
+        console.log("  This machine is already connected and tracked.");
+      }
+      console.log("  To connect it to another inlinr account, run activation with --replace.");
+      return 0;
+    }
+  }
   const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform, editor);
   openBrowser(init.verification_uri_complete);
   console.log("");
@@ -637,14 +702,19 @@ async function activate(config, cloud = false, editor = "claude-code") {
         printCloudSetup(result.token);
         return 0;
       }
+      const previous = new Set([config.deviceToken, machineToken()].filter(Boolean));
       saveMachineToken(result.token);
       save({
         ...config,
         deviceToken: "",
         tokenTag: tokenTag(result.token),
+        paused: false,
         lastParsedAt: new Date().toISOString(),
         files: {}
-      });
+      }, "set");
+      previous.delete(result.token);
+      for (const old of previous)
+        await revokeDevice(config.apiUrl, old);
       console.log("  Activated. Tracking starts now.");
       console.log("  The inlinr VS Code extension and CLI on this machine use this connection too.");
       return 0;
@@ -659,14 +729,28 @@ async function activate(config, cloud = false, editor = "claude-code") {
 }
 
 // src/commands/deactivate.ts
-async function deactivate(config) {
-  const source = tokenSource(config);
+async function deactivate(config, mode) {
+  const source = connection(config);
   if (!source) {
     console.log("  This machine is not connected.");
     return 0;
   }
   if (source.from === "env") {
     console.log("  This machine uses INLINR_TOKEN. Remove it from the environment to stop tracking.");
+    return 0;
+  }
+  if (!mode) {
+    console.log("  Two ways to stop, nothing changed yet:");
+    console.log("  --pause    stop tracking Claude Code, Codex and Gemini CLI here; the inlinr extension and CLI keep this machine's connection");
+    console.log("  --machine  disconnect this machine: the token is revoked and every inlinr plugin on it stops");
+    return 0;
+  }
+  if (mode === "pause") {
+    save({ ...config, paused: true, lastParsedAt: null, files: {} });
+    console.log("  Paused. Claude Code, Codex and Gemini CLI are no longer tracked on this machine; /inlinr:activate resumes from that moment.");
+    if (source.from === "machine") {
+      console.log("  The inlinr extension and CLI keep this machine's connection.");
+    }
     return 0;
   }
   const revoked = await revokeDevice(config.apiUrl, source.token);
@@ -676,15 +760,16 @@ async function deactivate(config) {
     ...config,
     deviceToken: "",
     tokenTag: null,
+    paused: false,
     lastParsedAt: null,
     lastSyncAt: null,
     files: {}
-  });
+  }, "set");
   console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
   if (machineToken()) {
-    console.log("  This machine is still connected through the inlinr CLI or VS Code extension, and Claude Code uses that connection. Run /inlinr:deactivate again to disconnect it too.");
+    console.log("  This machine is still connected through the inlinr extension or CLI with another token. Run /inlinr:deactivate --machine again to disconnect it too, or --pause to stop only Claude Code.");
   } else if (source.from === "machine") {
-    console.log("  The inlinr VS Code extension and CLI on this machine shared this connection: they are signed out too.");
+    console.log("  The inlinr extension and CLI on this machine shared this connection: they are signed out too.");
   }
   return 0;
 }
@@ -828,6 +913,13 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
   }
   return null;
 }
+function sharedConnectionNotice() {
+  return [
+    "inlinr (time tracking plugin) now tracks Claude Code sessions on this machine, using the connection the inlinr extension or CLI made here (one connection per machine).",
+    "Mention this to the user once, briefly, in your first reply.",
+    "If they do not want Claude Code tracked here, run the inlinr:deactivate skill and choose to pause; the extension keeps tracking."
+  ].join(" ");
+}
 
 // src/commands/session-check.ts
 function lastLogLine() {
@@ -842,7 +934,10 @@ function lastLogLine() {
 function sessionCheck(config) {
   if (process.env.CLAUDE_CODE_REMOTE === "true")
     return 0;
-  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+  if (config.paused)
+    return 0;
+  const source = tokenSource(config);
+  const notice = source?.from === "machine" && !config.lastParsedAt ? sharedConnectionNotice() : sessionNotice(Boolean(source), lastLogLine());
   if (notice) {
     console.log(JSON.stringify({
       hookSpecificOutput: {
@@ -964,11 +1059,14 @@ async function status(config) {
   const pending = all.filter((t) => hasNew(config, t)).length;
   const count = (tool) => all.filter((t) => t.tool === tool).length;
   const source = tokenSource(config);
-  const connected = !source ? "not connected — run /inlinr:activate" : source.from === "machine" ? "connected (this machine's, shared with the inlinr CLI and VS Code)" : source.from === "plugin" ? "connected (this plugin's own; /inlinr:activate shares it)" : "connected (INLINR_TOKEN)";
+  const connected = config.paused ? "paused on this machine — /inlinr:activate resumes" : !source ? "not connected — run /inlinr:activate" : source.from === "machine" ? "connected (this machine's, shared with the inlinr CLI and VS Code)" : source.from === "plugin" ? "connected (this plugin's own; /inlinr:activate shares it)" : "connected (INLINR_TOKEN)";
   console.log("");
   console.log(`  Plugin      ${VERSION}`);
   console.log(`  Machine     ${hostname2()}`);
   console.log(`  Account     ${connected}`);
+  if (source?.from === "plugin" && machineToken() && machineToken() !== source.token) {
+    console.log("              the inlinr extension and CLI here use another connection (two devices, maybe two accounts)");
+  }
   console.log(`  Server      ${config.apiUrl}`);
   console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
   console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
@@ -1511,9 +1609,17 @@ function repoResolver() {
 
 // src/commands/sync.ts
 async function sync(config, throttleSeconds) {
-  const deviceToken = token(config);
+  const source = tokenSource(config);
+  const deviceToken = source?.token ?? "";
   if (!deviceToken) {
     return 0;
+  }
+  if (source?.from === "plugin" && !machineToken()) {
+    try {
+      saveMachineToken(deviceToken);
+      config = { ...config, deviceToken: "" };
+      save(config, "set");
+    } catch {}
   }
   const tag = tokenTag(deviceToken);
   const otherToken = config.tokenTag != null && config.tokenTag !== tag;
@@ -1609,12 +1715,18 @@ async function main() {
       console.error("  --editor takes claude-code, codex or gemini-cli.");
       return 2;
     }
-    return activate(config, args[1] === "--cloud", editor);
+    return activate(config, {
+      cloud: args[1] === "--cloud",
+      replace: args.includes("--replace"),
+      editor
+    });
   }
   if (args[0] === "setup")
     return setup(args[1]);
-  if (args[0] === "deactivate")
-    return deactivate(config);
+  if (args[0] === "deactivate") {
+    const mode = args.includes("--machine") ? "machine" : args.includes("--pause") ? "pause" : null;
+    return deactivate(config, mode);
+  }
   if (args[0] === "status")
     return status(config);
   if (args[0] === "session-check")

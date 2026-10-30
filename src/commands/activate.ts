@@ -1,7 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { hostname } from "node:os";
-import { pollDeviceToken, startDeviceFlow } from "../api";
-import { type Config, save, saveMachineToken, tokenTag } from "../config";
+import {
+  checkToken,
+  pollDeviceToken,
+  revokeDevice,
+  startDeviceFlow,
+} from "../api";
+import {
+  type Config,
+  connection,
+  machineToken,
+  save,
+  saveMachineToken,
+  tokenTag,
+} from "../config";
 import type { AiTool } from "../transcript";
 import { printCloudSetup } from "./cloud";
 
@@ -35,9 +47,50 @@ function openBrowser(url: string): void {
  */
 export async function activate(
   config: Config,
-  cloud = false,
-  editor: AiTool = "claude-code",
+  {
+    cloud = false,
+    replace = false,
+    editor = "claude-code" as AiTool,
+  }: { cloud?: boolean; replace?: boolean; editor?: AiTool } = {},
 ): Promise<number> {
+  // One connection per machine. Already connected (by this plugin, the
+  // inlinr extension or the CLI), activating again would switch every
+  // plugin on the machine to whichever account approves the new code, in
+  // silence. So a working connection is kept, and this only resumes
+  // tracking here; `--replace` changes it on purpose.
+  const current = cloud ? null : connection(config);
+  if (current && current.from !== "env" && !replace) {
+    const state = await checkToken(config.apiUrl, current.token);
+    if (state === "unreachable") {
+      console.error(
+        "  inlinr.com could not be reached to check this machine's connection. Try again when online.",
+      );
+      return 1;
+    }
+    if (state === "ok") {
+      if (config.paused || !config.lastParsedAt) {
+        save({
+          ...config,
+          paused: false,
+          tokenTag: tokenTag(current.token),
+          lastParsedAt: new Date().toISOString(),
+          lastSyncAt: null,
+          files: {},
+        });
+        console.log(
+          "  This machine is already connected. Tracking starts now.",
+        );
+      } else {
+        console.log("  This machine is already connected and tracked.");
+      }
+      console.log(
+        "  To connect it to another inlinr account, run activation with --replace.",
+      );
+      return 0;
+    }
+    // Refused: the device was revoked. A new one replaces it below.
+  }
+
   const init = await startDeviceFlow(
     config.apiUrl,
     cloud ? "Claude Code cloud" : hostname(),
@@ -87,14 +140,25 @@ export async function activate(
       //
       // The token goes to config.toml, the machine's connection: the inlinr
       // CLI and the VS Code extension on this machine send with it too.
+      const previous = new Set(
+        [config.deviceToken, machineToken()].filter(Boolean),
+      );
       saveMachineToken(result.token);
-      save({
-        ...config,
-        deviceToken: "",
-        tokenTag: tokenTag(result.token),
-        lastParsedAt: new Date().toISOString(),
-        files: {},
-      });
+      save(
+        {
+          ...config,
+          deviceToken: "",
+          tokenTag: tokenTag(result.token),
+          paused: false,
+          lastParsedAt: new Date().toISOString(),
+          files: {},
+        },
+        "set",
+      );
+      // The connection it replaces is no longer held anywhere on this
+      // machine: revoked, so Settings does not keep a device nobody uses.
+      previous.delete(result.token);
+      for (const old of previous) await revokeDevice(config.apiUrl, old);
       console.log("  Activated. Tracking starts now.");
       console.log(
         "  The inlinr VS Code extension and CLI on this machine use this connection too.",

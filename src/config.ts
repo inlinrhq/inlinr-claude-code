@@ -61,6 +61,14 @@ export type Config = {
    * does on activation, instead of sending what was done while signed out.
    */
   tokenTag?: string | null;
+  /**
+   * Claude Code (and Codex, Gemini CLI) not tracked on this machine, while
+   * the machine's connection stays for the other plugins:
+   * `/inlinr:deactivate --pause`. A machine deactivated by a release before
+   * 0.7.0 reads as paused too (see `load`): someone who turned this plugin
+   * off must not have it start again because VS Code is signed in.
+   */
+  paused?: boolean;
   files: Record<string, FileState>;
 };
 
@@ -94,9 +102,17 @@ export function trustedApiUrl(raw: string | undefined | null): string {
   return DEFAULT_API;
 }
 
+/**
+ * `~/.inlinr`. `INLINR_HOME` moves it for the tests only: a repository can
+ * set Claude Code's environment, and pointing this folder inside the
+ * repository would have the plugin read a token planted there (and send
+ * this machine's sessions to its account) or write the token where it gets
+ * committed. The bundle is built with `NODE_ENV` set to production, so
+ * `dist/index.js` never reads it at all.
+ */
 export function configDir(): string {
   const override = process.env.INLINR_HOME?.trim();
-  if (override) return override;
+  if (override && process.env.NODE_ENV === "test") return override;
   return join(homedir(), ".inlinr");
 }
 
@@ -107,13 +123,23 @@ export function load(): Config {
     const raw = JSON.parse(
       readFileSync(configPath(), "utf8"),
     ) as Partial<Config>;
+    const deviceToken =
+      typeof raw.deviceToken === "string" ? raw.deviceToken : "";
+    const lastParsedAt =
+      typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null;
     return {
-      deviceToken: typeof raw.deviceToken === "string" ? raw.deviceToken : "",
+      deviceToken,
       apiUrl: trustedApiUrl(typeof raw.apiUrl === "string" ? raw.apiUrl : null),
-      lastParsedAt:
-        typeof raw.lastParsedAt === "string" ? raw.lastParsedAt : null,
+      lastParsedAt,
       lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
       tokenTag: typeof raw.tokenTag === "string" ? raw.tokenTag : null,
+      // This file is written only once a token was used. Without a token or
+      // a start date, and from before `paused` existed, it was left by
+      // `deactivate`: the person turned the plugin off.
+      paused:
+        typeof raw.paused === "boolean"
+          ? raw.paused
+          : !deviceToken && !lastParsedAt,
       files: raw.files && typeof raw.files === "object" ? raw.files : {},
     };
   } catch {
@@ -125,6 +151,7 @@ export function load(): Config {
       lastParsedAt: null,
       lastSyncAt: null,
       tokenTag: null,
+      paused: false,
       files: {},
     };
   }
@@ -149,9 +176,18 @@ export type TokenSource = {
 };
 
 export function tokenSource(config: Config): TokenSource | null {
+  if (config.paused) return null;
+  return connection(config);
+}
+
+/** The connection this machine has, whether or not this plugin is paused. */
+export function connection(config: Config): TokenSource | null {
   if (config.deviceToken) return { token: config.deviceToken, from: "plugin" };
   const machine = machineToken();
   if (machine) return { token: machine, from: "machine" };
+  // Only when nothing on the machine says otherwise: in a cloud session, or
+  // on a machine nobody connected (a CI runner). A repository can set this
+  // variable, so it never overrides a connection made by hand.
   const env = process.env.INLINR_TOKEN?.trim();
   if (env) return { token: env, from: "env" };
   return null;
@@ -246,7 +282,19 @@ export function saveMachineToken(value: string): void {
   renameSync(tmp, path);
 }
 
-export function save(config: Config): void {
+/**
+ * Write this file. `deviceToken` is taken from the disk, not from `config`,
+ * unless `token` says this call changes it: a sync loaded the file before
+ * `inlinr signout` cleared the token, and writing its copy back would bring
+ * a revoked token back to life.
+ */
+export function save(config: Config, token: "keep" | "set" = "keep"): void {
+  if (token === "keep") {
+    config = {
+      ...config,
+      deviceToken: diskDeviceToken() ?? config.deviceToken,
+    };
+  }
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
   const path = configPath();
@@ -260,6 +308,17 @@ export function save(config: Config): void {
     mode: 0o600,
   });
   renameSync(tmp, path);
+}
+
+function diskDeviceToken(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(), "utf8")) as {
+      deviceToken?: unknown;
+    };
+    return typeof raw.deviceToken === "string" ? raw.deviceToken : "";
+  } catch {
+    return null;
+  }
 }
 
 /** A sync older than this is taken for dead: its lock no longer counts. */

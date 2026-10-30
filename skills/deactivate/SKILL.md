@@ -1,18 +1,25 @@
 ---
 name: deactivate
-description: Disconnect this machine from your inlinr account
+description: Stop inlinr tracking on this machine, for Claude Code only or for the whole machine
 disable-model-invocation: true
 ---
 
-Run this exact command and show the user its full output:
+The connection is the machine's, shared with the inlinr extension for VS Code
+(Cursor, Windsurf) and the `inlinr` command. Stopping means one of two things,
+so first ask the user which one they want, in these words:
+
+- **Pause Claude Code here**: Claude Code, Codex and Gemini CLI are no longer
+  tracked on this machine; the extension keeps tracking. Nothing is revoked.
+- **Disconnect this machine**: the token is revoked on inlinr.com and every
+  inlinr plugin on the machine stops.
+
+Then run this exact command, with `--pause` or `--machine` for their answer,
+and show the user its full output:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" deactivate
+node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" deactivate --pause
 ```
 
-It removes the local token and revokes the device on inlinr.com, so tracking
-stops from this machine. The token is shared by every inlinr plugin on the
-machine, so the VS Code extension and the `inlinr` command are signed out too. Their history is untouched — this disconnects a
-machine, it does not delete anything.
-
-To connect again later, they run `/inlinr:activate`.
+Their history is untouched either way: this stops tracking, it does not
+delete anything. `/inlinr:activate` resumes after a pause, or connects the
+machine again.

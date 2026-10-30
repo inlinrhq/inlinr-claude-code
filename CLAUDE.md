@@ -56,12 +56,24 @@ dist/index.js     # the committed bundle Claude Code actually runs
 - Each transcript keeps its own read offset in `claude-code.json`;
   `lastParsedAt` is set once at activation and never moved, so nothing from
   before activation is sent.
-- One token per machine. `tokenSource`: this file's `deviceToken` (saved by
-  a release before 0.7.0; activating again empties it), then `config.toml`'s,
-  then `INLINR_TOKEN`. Activation writes `config.toml`; deactivation revokes
-  and clears whichever is in use. `tokenTag` (16 hex of its SHA-256) records
-  which token the read positions belong to: when another appears (a sign-out
-  and sign-in from the CLI or VS Code), tracking starts over from then.
+- One token per machine. `connection`: this file's `deviceToken` (saved by
+  a release before 0.7.0, moved to `config.toml` by the first sync when that
+  has none), then `config.toml`'s, then `INLINR_TOKEN` (only when the machine
+  has no token: a repository can set it). `tokenSource` is the same, null
+  while `paused`.
+- `paused` (`deactivate --pause`): this plugin off, the machine's connection
+  kept. A file with no token, no `lastParsedAt` and no `paused` key was left
+  by an older `deactivate` and reads as paused. `deactivate --machine`
+  revokes and clears the token everywhere; without a flag it only explains.
+- `activate` on a machine already connected checks the token
+  (`/api/v1/me/today`) and only resumes; `--replace` (or a refused token)
+  runs the device flow and revokes the tokens it replaces.
+- `tokenTag` (16 hex of the token's SHA-256) records which token the read
+  positions belong to: when another appears (a sign-out and sign-in from the
+  CLI or VS Code), tracking starts over from then.
+- `save` keeps the `deviceToken` on disk unless called with `"set"`, so a
+  sync never writes back a token cleared while it ran.
+- `INLINR_HOME` moves `~/.inlinr` only under `NODE_ENV=test`.
 - Failures go to `~/.inlinr/claude-code.log` (shown by `/inlinr:status`) and,
   once a day per error, to Admin → Errors. Off with `error_reports = false`,
   `INLINR_ERROR_REPORTS=0`, or Claude Code's `DISABLE_ERROR_REPORTING` /

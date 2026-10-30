@@ -7,7 +7,14 @@ import {
   parseGemini,
 } from "../agents";
 import { sendHeartbeats, toHeartbeats } from "../api";
-import { type Config, save, token, tokenTag } from "../config";
+import {
+  type Config,
+  machineToken,
+  save,
+  saveMachineToken,
+  tokenSource,
+  tokenTag,
+} from "../config";
 import { repoResolver } from "../repo";
 import { hasNew, readFrom, sessionFiles } from "../sessions";
 import { isEmpty, parseTranscript, type Session } from "../transcript";
@@ -17,11 +24,28 @@ export async function sync(
   config: Config,
   throttleSeconds: number,
 ): Promise<number> {
-  const deviceToken = token(config);
+  const source = tokenSource(config);
+  const deviceToken = source?.token ?? "";
   if (!deviceToken) {
     // Silent on purpose. A hook firing on every tool call must not print an
     // error into somebody's session because they have not activated yet.
     return 0;
+  }
+
+  if (source?.from === "plugin" && !machineToken()) {
+    // Connected by a release before 0.7.0, nothing in config.toml: the
+    // token moves there, once, and the inlinr extension and CLI use it
+    // too. Same token, so the read positions stay as they are. A machine
+    // whose config.toml holds another token keeps both: possibly two
+    // accounts on purpose, which /inlinr:status points out.
+    try {
+      saveMachineToken(deviceToken);
+      config = { ...config, deviceToken: "" };
+      save(config, "set");
+    } catch {
+      // Not an inlinr token's shape, or config.toml not writable: it stays
+      // where it was and keeps working.
+    }
   }
 
   const tag = tokenTag(deviceToken);
