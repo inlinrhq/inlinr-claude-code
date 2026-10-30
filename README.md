@@ -50,7 +50,7 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 | `/inlinr:activate` | Connect this machine. Opens a page, you approve it there. |
 | `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
 | `/inlinr:deactivate` | Disconnect this machine and revoke its token. |
-| `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
+| `/inlinr:cloud` | Get the one line that tracks Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
 | `/inlinr:upgrade <package> [version]` | Upgrade an npm dependency: reads its breaking changes, migration guides and advisories from inlinr, finds where the code uses it, upgrades, fixes and runs your checks. Only the package name and the two versions are sent. |
 
 You do not have to type them. Ask Claude in plain words ("is inlinr
@@ -106,23 +106,29 @@ rewritten whole, which is not read.
 
 ## Cloud sessions
 
-Claude Code on the web runs each session in a fresh container, and it does not
-install plugins — not yours, not even the ones a repository enables. Two things
-do carry over: the environment's variables, and the hooks in a repository's
-own `.claude/settings.json`. So cloud tracking is the same script, run by a hook
-committed to the repository, with a token from the environment:
+Claude Code on the web runs each session in a fresh container, often outside
+any repository (a project's threads), and it does not install plugins. What
+runs in every container is the environment's setup script, so cloud tracking
+is one line there, once:
 
-1. Run `/inlinr:cloud` on your machine and approve it. It prints a token and a
-   hooks block.
-2. In the cloud environment's settings, add `INLINR_TOKEN=<token>`, set network
-   access to Custom with `inlinr.com` added (keep the default package managers),
-   and save.
-3. Merge the hooks block into `.claude/settings.json` in each repository you
-   work on in the cloud, and commit it.
+1. Run `/inlinr:cloud` on your machine and approve it, or open Settings →
+   Editors → Add device on inlinr.com. Either gives you
+   `curl -fsSL https://inlinr.com/cloud-setup.sh | sh -s -- in_d_…`.
+2. Paste it into the cloud environment's **Setup script** (claude.ai/code, the
+   gear beside the environment). If its network access is Custom, add
+   `inlinr.com` to the allowed domains. Save.
 
-The hooks do nothing outside the cloud (`CLAUDE_CODE_REMOTE` is only set
-there), so they never double-count with the plugin on your machine. Claude Code
-reads a repository's hooks only in single-repository cloud sessions.
+The script downloads this plugin's bundle from `https://inlinr.com/claude-code.js`
+(the server passes on `main`), saves the token in `~/.inlinr/claude-code.json`
+and installs the plugin's hooks in `~/.claude/settings.json`, so every session
+is tracked, in every repository. Each container fetches the current bundle as
+it starts. The hooks do nothing outside the cloud (`CLAUDE_CODE_REMOTE` is only
+set there), so they never double-count with the plugin on your machine.
+
+Before 0.7.0 the setup was a token variable plus a hooks block committed to
+each repository. A repository that still has that block keeps working beside
+the new line: both run the same script against one state, so nothing is sent
+twice.
 
 `INLINR_TOKEN` works on any machine, not only in the cloud: a token from the
 environment is used whenever none has been saved by `/inlinr:activate`.
@@ -267,9 +273,10 @@ Turn it off with `error_reports = false` under `[behavior]` in
 connected, when it last synced, how many transcripts have something new, and
 whether errors have been logged.
 
-**Cloud sessions do not show up.** Check that the environment has
-`INLINR_TOKEN`, that `inlinr.com` is in its network allowlist, and that the
-session has a single repository whose `.claude/settings.json` has the hooks.
+**Cloud sessions do not show up.** Check that the environment's Setup script
+has the line from `/inlinr:cloud`, and that `inlinr.com` is in its allowed
+domains if its network access is Custom. The setup log says
+"inlinr: cloud sessions in this environment are tracked." when it worked.
 
 ## License
 

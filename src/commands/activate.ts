@@ -73,7 +73,7 @@ export async function activate(
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
       if (cloud) {
-        printCloudSetup(result.token);
+        printCloudSetup(config.apiUrl, result.token);
         return 0;
       }
       // The clock starts now.

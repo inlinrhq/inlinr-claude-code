@@ -478,52 +478,24 @@ async function revokeDevice(apiUrl, token) {
 }
 
 // src/commands/cloud.ts
-var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
-function cloudHook(throttle) {
-  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
-  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
+function cloudSetupLine(apiUrl, deviceToken) {
+  return `curl -fsSL ${apiUrl}/cloud-setup.sh | sh -s -- ${deviceToken}`;
 }
-function printCloudSetup(deviceToken) {
-  const hook = (throttle) => [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: cloudHook(throttle),
-          timeout: 20,
-          async: true
-        }
-      ]
-    }
-  ];
-  const settings = {
-    hooks: {
-      SessionStart: hook(0),
-      UserPromptSubmit: hook(120),
-      PostToolUse: hook(120),
-      SubagentStop: hook(120),
-      Stop: hook(0),
-      SessionEnd: hook(0)
-    }
-  };
+function printCloudSetup(apiUrl, deviceToken) {
   console.log("");
-  console.log("  Approved. Three steps in Claude Code on the web:");
+  console.log("  Approved. One step in Claude Code on the web, once:");
   console.log("");
-  console.log("  1. In the cloud environment's settings, add this environment variable:");
+  console.log("  Open the cloud environment's settings (claude.ai/code, the gear beside");
+  console.log("  the environment) and paste this line into Setup script:");
   console.log("");
-  console.log(`     INLINR_TOKEN=${deviceToken}`);
+  console.log(`     ${cloudSetupLine(apiUrl, deviceToken)}`);
   console.log("");
-  console.log("  2. In the same settings, set network access to Custom, add inlinr.com,");
-  console.log("     and keep the default list of package managers.");
+  console.log("  If its network access is Custom, add inlinr.com to the allowed domains.");
+  console.log("  Every session in that environment is then tracked, in every repository,");
+  console.log("  and gets new versions of the plugin by itself.");
   console.log("");
-  console.log("  3. Merge this into .claude/settings.json in each repository you work on:");
-  console.log("");
-  console.log(JSON.stringify(settings, null, 2).split(`
-`).map((l) => `     ${l}`).join(`
-`));
-  console.log("");
-  console.log("  Keep the token private: anyone using the environment can read it.");
-  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
+  console.log("  The line holds a token: keep it in the environment's settings, never in");
+  console.log("  a repository. Remove the device from Settings on inlinr.com to revoke it.");
 }
 
 // src/commands/activate.ts
@@ -550,7 +522,7 @@ async function activate(config, cloud = false, editor = "claude-code") {
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
       if (cloud) {
-        printCloudSetup(result.token);
+        printCloudSetup(config.apiUrl, result.token);
         return 0;
       }
       save({
@@ -682,7 +654,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.6.1";
+var VERSION = "0.7.0";
 
 // src/failure.ts
 var logPath = () => join5(configDir(), "claude-code.log");

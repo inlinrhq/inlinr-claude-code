@@ -1,82 +1,43 @@
 /**
- * `activate --cloud`: what a Claude Code cloud session needs to be tracked.
+ * `activate --cloud`: what a Claude Code cloud environment needs to be tracked.
+ *
+ * A cloud session installs no plugin, starts in a fresh container and often
+ * outside any repository (a project's threads). What runs in every one is
+ * the environment's setup script, so tracking is one line there: inlinr.com's
+ * /cloud-setup.sh downloads this bundle from inlinr.com, saves the token and
+ * installs these hooks at user level. inlinr.com rather than GitHub: it is
+ * the host the beats go to, so an environment that sends them can reach it,
+ * while a Custom network policy may block GitHub's raw files.
  */
 
-/**
- * The URL of this build, for a cloud session to fetch.
- *
- * GitHub is reachable from a cloud session by default; inlinr.com has to be
- * added to the environment's network allowlist either way, for the beats.
- */
-const CLOUD_SCRIPT =
-  "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
-
-/**
- * A hook for a repository's own `.claude/settings.json`.
- *
- * A cloud session does not install plugins, not even the ones a repository
- * enables, but it does run the hooks a repository declares. So the cloud
- * runs the same script through a hook committed to the repository.
- *
- * It does nothing on a laptop (`CLAUDE_CODE_REMOTE` is only set in the
- * cloud), where the plugin already runs: two copies reading the same
- * transcripts against one state file would send everything twice.
- */
-export function cloudHook(throttle: number): string {
-  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
-  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
+/** The line pasted into a cloud environment's Setup script. */
+export function cloudSetupLine(apiUrl: string, deviceToken: string): string {
+  return `curl -fsSL ${apiUrl}/cloud-setup.sh | sh -s -- ${deviceToken}`;
 }
 
-export function printCloudSetup(deviceToken: string): void {
-  const hook = (throttle: number) => [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: cloudHook(throttle),
-          timeout: 20,
-          async: true,
-        },
-      ],
-    },
-  ];
-  const settings = {
-    hooks: {
-      SessionStart: hook(0),
-      UserPromptSubmit: hook(120),
-      PostToolUse: hook(120),
-      SubagentStop: hook(120),
-      Stop: hook(0),
-      SessionEnd: hook(0),
-    },
-  };
+export function printCloudSetup(apiUrl: string, deviceToken: string): void {
   console.log("");
-  console.log("  Approved. Three steps in Claude Code on the web:");
+  console.log("  Approved. One step in Claude Code on the web, once:");
   console.log("");
   console.log(
-    "  1. In the cloud environment's settings, add this environment variable:",
+    "  Open the cloud environment's settings (claude.ai/code, the gear beside",
   );
+  console.log("  the environment) and paste this line into Setup script:");
   console.log("");
-  console.log(`     INLINR_TOKEN=${deviceToken}`);
-  console.log("");
-  console.log(
-    "  2. In the same settings, set network access to Custom, add inlinr.com,",
-  );
-  console.log("     and keep the default list of package managers.");
+  console.log(`     ${cloudSetupLine(apiUrl, deviceToken)}`);
   console.log("");
   console.log(
-    "  3. Merge this into .claude/settings.json in each repository you work on:",
+    "  If its network access is Custom, add inlinr.com to the allowed domains.",
   );
+  console.log(
+    "  Every session in that environment is then tracked, in every repository,",
+  );
+  console.log("  and gets new versions of the plugin by itself.");
   console.log("");
   console.log(
-    JSON.stringify(settings, null, 2)
-      .split("\n")
-      .map((l) => `     ${l}`)
-      .join("\n"),
+    "  The line holds a token: keep it in the environment's settings, never in",
   );
-  console.log("");
   console.log(
-    "  Keep the token private: anyone using the environment can read it.",
+    "  a repository. Remove the device from Settings on inlinr.com to revoke it.",
   );
-  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
 }
