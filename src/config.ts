@@ -279,7 +279,7 @@ export function saveMachineToken(value: string): void {
   const path = machinePath();
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, next, { encoding: "utf8", mode: 0o600 });
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
 }
 
 /**
@@ -307,7 +307,44 @@ export function save(config: Config, token: "keep" | "set" = "keep"): void {
     encoding: "utf8",
     mode: 0o600,
   });
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
+}
+
+/** Codes Windows answers a rename with while another process has the file open. */
+const BUSY = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/**
+ * Rename `tmp` over `path`. Windows refuses to replace a file another process
+ * is reading (the CLI, the extension, another hook), for a few milliseconds:
+ * try again a few times before giving up, and never leave `tmp` behind.
+ */
+export function replaceFile(
+  tmp: string,
+  path: string,
+  rename: (from: string, to: string) => void = renameSync,
+): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      rename(tmp, path);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (!BUSY.has(code) || attempt >= 7) {
+        try {
+          unlinkSync(tmp);
+        } catch {
+          // Already gone.
+        }
+        throw err;
+      }
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        10 << Math.min(attempt, 3),
+      );
+    }
+  }
 }
 
 function diskDeviceToken(): string | null {

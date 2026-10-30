@@ -1,5 +1,13 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +15,7 @@ import {
   load,
   machineToken,
   readMachineToken,
+  replaceFile,
   SYNC_LOCK_STALE_MS,
   save,
   saveMachineToken,
@@ -132,4 +141,35 @@ test("the token: this plugin's own, then the machine's, then the environment", (
   else process.env.INLINR_TOKEN = saved;
   saveMachineToken("");
   expect(machineToken()).toBe("");
+});
+
+describe("replaceFile", () => {
+  test("tries again while Windows refuses the rename", () => {
+    const dir = mkdtempSync(join(tmpdir(), "inlinr-replace-"));
+    const tmp = join(dir, "a.tmp");
+    const path = join(dir, "a");
+    writeFileSync(tmp, "new");
+    let calls = 0;
+    replaceFile(tmp, path, (from, to) => {
+      calls++;
+      if (calls < 3) {
+        throw Object.assign(new Error("busy"), { code: "EPERM" });
+      }
+      renameSync(from, to);
+    });
+    expect(calls).toBe(3);
+    expect(readFileSync(path, "utf8")).toBe("new");
+  });
+
+  test("gives up on another error and removes its temporary file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "inlinr-replace-"));
+    const tmp = join(dir, "a.tmp");
+    writeFileSync(tmp, "new");
+    expect(() =>
+      replaceFile(tmp, join(dir, "a"), () => {
+        throw Object.assign(new Error("nope"), { code: "ENOSPC" });
+      }),
+    ).toThrow("nope");
+    expect(existsSync(tmp)).toBe(false);
+  });
 });

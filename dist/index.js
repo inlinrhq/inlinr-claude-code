@@ -162,7 +162,7 @@ function saveMachineToken(value) {
   const path = machinePath();
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, next, { encoding: "utf8", mode: 384 });
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
 }
 function save(config, token = "keep") {
   if (token === "keep") {
@@ -180,7 +180,25 @@ function save(config, token = "keep") {
     encoding: "utf8",
     mode: 384
   });
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
+}
+var BUSY = new Set(["EPERM", "EACCES", "EBUSY"]);
+function replaceFile(tmp, path, rename = renameSync) {
+  for (let attempt = 0;; attempt++) {
+    try {
+      rename(tmp, path);
+      return;
+    } catch (err) {
+      const code = err.code ?? "";
+      if (!BUSY.has(code) || attempt >= 7) {
+        try {
+          unlinkSync(tmp);
+        } catch {}
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 << Math.min(attempt, 3));
+    }
+  }
 }
 function diskDeviceToken() {
   try {
