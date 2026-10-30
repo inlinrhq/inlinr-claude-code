@@ -13,9 +13,15 @@ function lastLogLine(): string | null {
 }
 
 export function sessionCheck(config: Config): number {
-  // Cloud sessions never have the plugin; their hooks live in the repository.
-  if (process.env.CLAUDE_CODE_REMOTE === "true") return 0;
-  const notice = sessionNotice(Boolean(token(config)), lastLogLine());
+  // In the cloud this runs from a repository's plugin or hooks, or from the
+  // setup line; the way to connect is then the line, not this machine.
+  const cloud = process.env.CLAUDE_CODE_REMOTE === "true";
+  const notice = sessionNotice(
+    Boolean(token(config)),
+    lastLogLine(),
+    Date.now(),
+    cloud ? `node "${process.argv[1]}"` : null,
+  );
   if (notice) {
     console.log(
       JSON.stringify({

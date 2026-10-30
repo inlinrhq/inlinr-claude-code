@@ -37,3 +37,14 @@ test("ignores an old 401", () => {
     ),
   ).toBeNull();
 });
+
+test("in a cloud session, offers the connection that also covers later sessions", () => {
+  const notice = sessionNotice(false, null, now, 'node "/tmp/x.js"');
+  expect(notice).toContain('node "/tmp/x.js" activate --cloud');
+  expect(notice).toContain("Setup script");
+  expect(notice).not.toContain("inlinr:activate");
+});
+
+test("in a connected cloud session, says nothing", () => {
+  expect(sessionNotice(true, null, now, 'node "/tmp/x.js"')).toBeNull();
+});

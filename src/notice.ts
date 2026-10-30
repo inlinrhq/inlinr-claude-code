@@ -11,7 +11,21 @@ export function sessionNotice(
   connected: boolean,
   lastLogLine: string | null,
   now = Date.now(),
+  /** The command that runs this script, in a cloud session; null elsewhere. */
+  cloudScript: string | null = null,
 ): string | null {
+  if (!connected && cloudScript) {
+    // A cloud container is new each time: what the person needs is the line
+    // that connects every later session too, and this one tracked now.
+    return [
+      "inlinr (time tracking) runs in this Claude Code cloud session but is not connected to an inlinr account, so this session is not tracked.",
+      "Mention this to the user once, briefly, at a natural point in your first reply, and offer to connect it.",
+      `If they agree, run \`${cloudScript} activate --cloud\` in the background, give them the link and code it prints as soon as they appear, and wait for it to finish.`,
+      "Once approved, this session is tracked from then on, and the command prints one line starting with `curl -fsSL`.",
+      "Give the user that line in a code block and tell them to paste it once into this cloud environment's Setup script (claude.ai/code, the gear beside the environment), and to add inlinr.com to its allowed domains if its network access is Custom: every later session is then tracked without asking.",
+      "Never write that line or its token into a file of the repository.",
+    ].join(" ");
+  }
   if (!connected) {
     return [
       "inlinr (time tracking plugin) is installed but this machine is not connected to an inlinr account, so nothing is being tracked.",

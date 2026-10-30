@@ -24,3 +24,22 @@ no variable, no file in any repository, and new versions arrive by themselves.
 Never write the line or its token into a file of a repository: it belongs in
 the environment's settings only. The same line is also in inlinr's dashboard,
 Settings → Editors → Add device.
+
+For a repository a team shares, also offer to declare the plugin in the
+repository's `.claude/settings.json`, merged with what is there, so everyone
+who opens it gets the plugin, on their machine and in cloud sessions, and is
+told in the session when it is not connected yet:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "inlinr": {
+      "source": { "source": "github", "repo": "inlinrhq/inlinr-claude-code" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": { "inlinr@inlinr": true }
+}
+```
+
+Each person still connects their own account: no token goes in the file.

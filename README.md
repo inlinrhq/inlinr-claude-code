@@ -125,6 +125,29 @@ is tracked, in every repository. Each container fetches the current bundle as
 it starts. The hooks do nothing outside the cloud (`CLAUDE_CODE_REMOTE` is only
 set there), so they never double-count with the plugin on your machine.
 
+A cloud session where the plugin runs without a token (a repository that
+declares it, below) tells Claude so at its start. Claude then offers to
+connect: you approve a link, the session is tracked from then on, and you get
+the line for the environment's Setup script so later sessions need nothing.
+
+For a repository a team shares, declare the plugin in its
+`.claude/settings.json` so everyone who opens it gets it, locally and in the
+cloud:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "inlinr": {
+      "source": { "source": "github", "repo": "inlinrhq/inlinr-claude-code" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": { "inlinr@inlinr": true }
+}
+```
+
+Each person connects their own account; no token goes in the file.
+
 Before 0.7.0 the setup was a token variable plus a hooks block committed to
 each repository. A repository that still has that block keeps working beside
 the new line: both run the same script against one state, so nothing is sent

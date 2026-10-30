@@ -73,6 +73,13 @@ export async function activate(
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
       if (cloud) {
+        // Run from inside a cloud session: track it now. The container is
+        // gone after it, which is what the printed line is for. Its
+        // transcripts are all from this container, so none is skipped.
+        if (process.env.CLAUDE_CODE_REMOTE === "true") {
+          save({ ...config, deviceToken: result.token });
+          console.log("  This session is tracked from now on.");
+        }
         printCloudSetup(config.apiUrl, result.token);
         return 0;
       }
