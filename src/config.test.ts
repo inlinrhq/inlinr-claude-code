@@ -1,13 +1,27 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireSyncLock,
   load,
+  machineToken,
+  readMachineToken,
+  replaceFile,
   SYNC_LOCK_STALE_MS,
   save,
+  saveMachineToken,
+  tokenSource,
   trustedApiUrl,
+  withMachineToken,
 } from "./config";
 
 let home = "";
@@ -70,4 +84,92 @@ test("an address from the environment is checked like any other", () => {
   } finally {
     delete process.env.INLINR_API_URL;
   }
+});
+
+const TOKEN = "in_d_abcdefghijklmnopqrstuvwxyz012345";
+
+test("the machine's token is read from the [auth] table only", () => {
+  expect(
+    readMachineToken(`[auth]\n  device_token = "${TOKEN}"\n\n[behavior]\n`),
+  ).toBe(TOKEN);
+  expect(readMachineToken(`[auth]\ndevice_token = '${TOKEN}'\n`)).toBe(TOKEN);
+  expect(readMachineToken(`[other]\ndevice_token = "${TOKEN}"\n`)).toBe("");
+  expect(readMachineToken(`[auth]\n  device_token = ""\n`)).toBe("");
+  // Anything that is not an inlinr token is not one.
+  expect(readMachineToken(`[auth]\ndevice_token = "hello"\n`)).toBe("");
+});
+
+test("saving the machine's token keeps the rest of config.toml", () => {
+  const cli = `[auth]\n  device_token = ""\n\n[behavior]\n  heartbeat_rate_limit_seconds = 120\n  error_reports = false\n`;
+  const saved = withMachineToken(cli, TOKEN);
+  expect(saved).toBe(
+    cli.replace('device_token = ""', `device_token = "${TOKEN}"`),
+  );
+  expect(withMachineToken(saved, "")).toBe(cli);
+
+  // No [auth] table yet, or no file at all.
+  expect(withMachineToken("[behavior]\n  deps_sync = true\n", TOKEN)).toBe(
+    `[behavior]\n  deps_sync = true\n\n[auth]\n  device_token = "${TOKEN}"\n`,
+  );
+  expect(readMachineToken(withMachineToken("", TOKEN))).toBe(TOKEN);
+  // A table without the key gets it.
+  expect(
+    readMachineToken(withMachineToken("[auth]\n[behavior]\n", TOKEN)),
+  ).toBe(TOKEN);
+});
+
+test("only an inlinr token is written into config.toml", () => {
+  expect(() =>
+    withMachineToken("", 'x"\n[behavior]\nerror_reports = false'),
+  ).toThrow();
+});
+
+test("the token: this plugin's own, then the machine's, then the environment", () => {
+  const saved = process.env.INLINR_TOKEN;
+  delete process.env.INLINR_TOKEN;
+  const config = load();
+  expect(tokenSource(config)).toBeNull();
+  process.env.INLINR_TOKEN = "in_d_from_the_environment_0000";
+  expect(tokenSource(config)?.from).toBe("env");
+  saveMachineToken(TOKEN);
+  expect(tokenSource(config)).toEqual({ token: TOKEN, from: "machine" });
+  expect(
+    tokenSource({ ...config, deviceToken: "in_d_older_release_token_00" })
+      ?.from,
+  ).toBe("plugin");
+  if (saved === undefined) delete process.env.INLINR_TOKEN;
+  else process.env.INLINR_TOKEN = saved;
+  saveMachineToken("");
+  expect(machineToken()).toBe("");
+});
+
+describe("replaceFile", () => {
+  test("tries again while Windows refuses the rename", () => {
+    const dir = mkdtempSync(join(tmpdir(), "inlinr-replace-"));
+    const tmp = join(dir, "a.tmp");
+    const path = join(dir, "a");
+    writeFileSync(tmp, "new");
+    let calls = 0;
+    replaceFile(tmp, path, (from, to) => {
+      calls++;
+      if (calls < 3) {
+        throw Object.assign(new Error("busy"), { code: "EPERM" });
+      }
+      renameSync(from, to);
+    });
+    expect(calls).toBe(3);
+    expect(readFileSync(path, "utf8")).toBe("new");
+  });
+
+  test("gives up on another error and removes its temporary file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "inlinr-replace-"));
+    const tmp = join(dir, "a.tmp");
+    writeFileSync(tmp, "new");
+    expect(() =>
+      replaceFile(tmp, join(dir, "a"), () => {
+        throw Object.assign(new Error("nope"), { code: "ENOSPC" });
+      }),
+    ).toThrow("nope");
+    expect(existsSync(tmp)).toBe(false);
+  });
 });

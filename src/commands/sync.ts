@@ -7,7 +7,14 @@ import {
   parseGemini,
 } from "../agents";
 import { sendHeartbeats, toHeartbeats } from "../api";
-import { type Config, save, token } from "../config";
+import {
+  type Config,
+  machineToken,
+  save,
+  saveMachineToken,
+  tokenSource,
+  tokenTag,
+} from "../config";
 import { repoResolver } from "../repo";
 import { hasNew, readFrom, sessionFiles } from "../sessions";
 import { isEmpty, parseTranscript, type Session } from "../transcript";
@@ -17,21 +24,45 @@ export async function sync(
   config: Config,
   throttleSeconds: number,
 ): Promise<number> {
-  const deviceToken = token(config);
+  const source = tokenSource(config);
+  const deviceToken = source?.token ?? "";
   if (!deviceToken) {
     // Silent on purpose. A hook firing on every tool call must not print an
     // error into somebody's session because they have not activated yet.
     return 0;
   }
 
-  if (!config.lastParsedAt) {
-    // A token from the environment, never activated here: tracking starts
-    // now, for the same reason it does on activation. In a cloud session
-    // the SessionStart hook gets here before any work has happened.
+  if (source?.from === "plugin" && !machineToken()) {
+    // Connected by a release before 0.7.0, nothing in config.toml: the
+    // token moves there, once, and the inlinr extension and CLI use it
+    // too. Same token, so the read positions stay as they are. A machine
+    // whose config.toml holds another token keeps both: possibly two
+    // accounts on purpose, which /inlinr:status points out.
+    try {
+      saveMachineToken(deviceToken);
+      config = { ...config, deviceToken: "" };
+      save(config, "set");
+    } catch {
+      // Not an inlinr token's shape, or config.toml not writable: it stays
+      // where it was and keeps working.
+    }
+  }
+
+  const tag = tokenTag(deviceToken);
+  const otherToken = config.tokenTag != null && config.tokenTag !== tag;
+  if (!config.lastParsedAt || otherToken) {
+    // A token never activated by this plugin: from the environment, or the
+    // machine's, saved by the CLI or VS Code. Tracking starts now, for the
+    // same reason it does on activation. In a cloud session the
+    // SessionStart hook gets here before any work has happened. A token
+    // that changed (signed out, then in again elsewhere) starts over too:
+    // what was done while signed out is not sent afterwards.
     save({
       ...config,
+      tokenTag: tag,
       lastParsedAt: new Date().toISOString(),
       lastSyncAt: new Date().toISOString(),
+      files: otherToken ? {} : config.files,
     });
     return 0;
   }
@@ -111,6 +142,8 @@ export async function sync(
 
   save({
     ...config,
+    // Recorded on the first sync of a release that knows the tag.
+    tokenTag: tag,
     files,
     lastSyncAt: new Date().toISOString(),
   });
