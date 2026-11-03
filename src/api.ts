@@ -1,4 +1,5 @@
 import { dirname } from "node:path";
+import { cloudAccountHeader } from "./commands/cloud";
 import type { AiTool, Session } from "./transcript";
 
 /**
@@ -306,6 +307,7 @@ export async function sendHeartbeats(
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
+        ...cloudAccountHeader(),
       },
       body: JSON.stringify(chunk),
     });
@@ -338,7 +340,7 @@ export async function revokeDevice(
   try {
     const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, ...cloudAccountHeader() },
     });
     return res.ok;
   } catch {
@@ -357,10 +359,13 @@ export async function checkToken(
 ): Promise<"ok" | "refused" | "unreachable"> {
   try {
     const res = await fetch(`${apiUrl}/api/v1/me/today`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, ...cloudAccountHeader() },
       signal: AbortSignal.timeout(5000),
     });
     if (res.status === 401) return "refused";
+    // A cloud setup line may send and not read: refused here means the
+    // token was accepted.
+    if (res.status === 403) return "ok";
     return res.ok ? "ok" : "unreachable";
   } catch {
     return "unreachable";

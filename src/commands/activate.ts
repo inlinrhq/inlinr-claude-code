@@ -15,7 +15,7 @@ import {
   tokenTag,
 } from "../config";
 import type { AiTool } from "../transcript";
-import { printCloudSetup } from "./cloud";
+import { cloudSteps } from "./cloud";
 
 /**
  * Open a URL in the user's browser.
@@ -40,10 +40,10 @@ function openBrowser(url: string): void {
 }
 
 /**
- * `cloud` gets a token for Claude Code cloud sessions instead of this
- * machine. Those start in a fresh container every time, so a token saved to
- * disk is gone by the next session — it has to live in the environment's
- * settings, and the user has to see it to paste it there.
+ * `cloud`, or any activation from inside a cloud session, signs nothing in:
+ * a container is gone after its session, so a device made there tracks one
+ * session and piles up in Settings. Cloud sessions are tracked by the setup
+ * line made on inlinr.com (cloud.ts), and this says how.
  */
 export async function activate(
   config: Config,
@@ -58,7 +58,12 @@ export async function activate(
   // plugin on the machine to whichever account approves the new code, in
   // silence. So a working connection is kept, and this only resumes
   // tracking here; `--replace` changes it on purpose.
-  const current = cloud ? null : connection(config);
+  if (cloud || process.env.CLAUDE_CODE_REMOTE === "true") {
+    console.log("");
+    for (const line of cloudSteps(config.apiUrl)) console.log(`  ${line}`);
+    return 0;
+  }
+  const current = connection(config);
   if (current && current.from !== "env" && !replace) {
     const state = await checkToken(config.apiUrl, current.token);
     if (state === "unreachable") {
@@ -93,8 +98,8 @@ export async function activate(
 
   const init = await startDeviceFlow(
     config.apiUrl,
-    cloud ? "Claude Code cloud" : hostname(),
-    cloud ? "linux" : process.platform,
+    hostname(),
+    process.platform,
     editor,
   );
 
@@ -104,11 +109,7 @@ export async function activate(
   openBrowser(init.verification_uri_complete);
 
   console.log("");
-  console.log(
-    cloud
-      ? "  Approve Claude Code cloud in the browser tab that just opened."
-      : "  Approve this machine in the browser tab that just opened.",
-  );
+  console.log("  Approve this machine in the browser tab that just opened.");
   console.log(`  If it did not open: ${init.verification_uri_complete}`);
   console.log("");
   console.log(`  The code, if it asks: ${init.user_code}`);
@@ -125,10 +126,6 @@ export async function activate(
     delay = wait;
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
-      if (cloud) {
-        printCloudSetup(result.token);
-        return 0;
-      }
       // The clock starts now.
       //
       // Claude Code keeps every transcript it has ever written — a month of

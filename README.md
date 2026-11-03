@@ -68,7 +68,7 @@ in `cmd.exe` either. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` for us.
 | `/inlinr:activate` | Connect this machine. Opens a page, you approve it there. |
 | `/inlinr:status` | Which build is running, whether it is connected, when it last synced, how many transcripts are in scope. |
 | `/inlinr:deactivate` | Pause Claude Code tracking here, or disconnect the machine (asks which). |
-| `/inlinr:cloud` | Get a token and the setup for Claude Code cloud sessions. See [Cloud sessions](#cloud-sessions). |
+| `/inlinr:cloud` | How to track Claude Code cloud sessions: the setup line from inlinr.com. See [Cloud sessions](#cloud-sessions). |
 | `/inlinr:upgrade <package> [version]` | Upgrade an npm dependency: reads its breaking changes, migration guides and advisories from inlinr, finds where the code uses it, upgrades, fixes and runs your checks. Only the package name and the two versions are sent. |
 
 You do not have to type them. Ask Claude in plain words ("is inlinr
@@ -124,26 +124,35 @@ rewritten whole, which is not read.
 
 ## Cloud sessions
 
-Claude Code on the web runs each session in a fresh container, and it does not
-install plugins — not yours, not even the ones a repository enables. Two things
-do carry over: the environment's variables, and the hooks in a repository's
-own `.claude/settings.json`. So cloud tracking is the same script, run by a hook
-committed to the repository, with a token from the environment:
+Claude Code on the web runs each session in a fresh container, often outside
+any repository (a project's threads), and it does not install plugins. What
+runs in every container is the environment's **setup script**, so cloud
+tracking is one line there:
 
-1. Run `/inlinr:cloud` on your machine and approve it. It prints a token and a
-   hooks block.
-2. In the cloud environment's settings, add `INLINR_TOKEN=<token>`, set network
-   access to Custom with `inlinr.com` added (keep the default package managers),
-   and save.
-3. Merge the hooks block into `.claude/settings.json` in each repository you
-   work on in the cloud, and commit it.
+1. On inlinr.com, open Settings → Editors, choose **Add device**, then **Get
+   the setup line**. `/inlinr:cloud` says the same.
+2. On claude.ai/code, open the settings of a cloud environment only you use
+   (the gear beside it) and paste the line into **Setup script**. If its
+   network access is Custom, add `inlinr.com` to the allowed domains.
 
-The hooks do nothing outside the cloud (`CLAUDE_CODE_REMOTE` is only set
-there), so they never double-count with the plugin on your machine. Claude Code
-reads a repository's hooks only in single-repository cloud sessions.
+Each container then downloads this plugin from inlinr.com, runs it only if its
+SHA-256 is the one inlinr pinned, and installs its hooks at user level, so
+every session is tracked in every repository. The line's token can send
+activity and nothing else, and from 0.7.1 it is bound to the claude.ai account
+of the first session that uses it (the plugin sends a SHA-256 of
+`CLAUDE_CODE_ACCOUNT_UUID`, never the account itself): sessions of another
+account are refused.
 
-`INLINR_TOKEN` works on any machine, not only in the cloud: a token from the
-environment is used whenever none has been saved by `/inlinr:activate`.
+A cloud session with the plugin but no line (for example the plugin turned on
+in your claude.ai account) is told so at its start, with where to get the line.
+The line is never printed in a session: whatever is printed there goes into
+its transcript.
+
+`INLINR_TOKEN` still works on any machine nobody activates by hand, such as a
+CI runner: it is used only when the machine has no token of its own. The older
+hooks block for a repository's `.claude/settings.json` is gone: it downloaded
+the plugin from GitHub, which many cloud environments block, and never ran in a
+session started outside that repository.
 
 The token and the beats only ever go to `https://inlinr.com`: since 0.5.1 an
 `INLINR_API_URL` pointing anywhere else (a repository can set environment

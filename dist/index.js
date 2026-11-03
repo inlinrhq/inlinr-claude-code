@@ -437,6 +437,38 @@ import { hostname } from "node:os";
 
 // src/api.ts
 import { dirname } from "node:path";
+
+// src/commands/cloud.ts
+import { createHash as createHash2 } from "node:crypto";
+function cloudSettingsUrl(apiUrl) {
+  return `${apiUrl}/dashboard/settings?section=editors`;
+}
+function cloudSteps(apiUrl) {
+  return [
+    "To track Claude Code on the web, once per cloud environment:",
+    "",
+    `  1. Open ${cloudSettingsUrl(apiUrl)}, choose Add device, then Get the setup line.`,
+    "  2. On claude.ai/code, open the settings of a cloud environment only you use",
+    "     (the gear beside it) and paste the line into Setup script.",
+    "     If its network access is Custom, add inlinr.com to the allowed domains.",
+    "",
+    "Every session in that environment is then tracked, in every repository.",
+    "The line holds a token: it stays on inlinr.com and in the environment's",
+    "settings, never in a repository or a chat."
+  ];
+}
+function cloudAccountHeader(env = process.env) {
+  if (env.CLAUDE_CODE_REMOTE !== "true")
+    return {};
+  const account = env.CLAUDE_CODE_ACCOUNT_UUID?.trim();
+  if (!account)
+    return {};
+  return {
+    "x-inlinr-cloud-account": createHash2("sha256").update(account).digest("hex")
+  };
+}
+
+// src/api.ts
 async function startDeviceFlow(apiUrl, hostname, platform, editor = "claude-code") {
   const res = await fetch(`${apiUrl}/api/auth/device`, {
     method: "POST",
@@ -578,7 +610,8 @@ async function sendHeartbeats(apiUrl, token, beats) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${token}`
+        authorization: `Bearer ${token}`,
+        ...cloudAccountHeader()
       },
       body: JSON.stringify(chunk)
     });
@@ -594,7 +627,7 @@ async function revokeDevice(apiUrl, token) {
   try {
     const res = await fetch(`${apiUrl}/api/auth/device/revoke`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}` }
+      headers: { authorization: `Bearer ${token}`, ...cloudAccountHeader() }
     });
     return res.ok;
   } catch {
@@ -604,64 +637,17 @@ async function revokeDevice(apiUrl, token) {
 async function checkToken(apiUrl, token) {
   try {
     const res = await fetch(`${apiUrl}/api/v1/me/today`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, ...cloudAccountHeader() },
       signal: AbortSignal.timeout(5000)
     });
     if (res.status === 401)
       return "refused";
+    if (res.status === 403)
+      return "ok";
     return res.ok ? "ok" : "unreachable";
   } catch {
     return "unreachable";
   }
-}
-
-// src/commands/cloud.ts
-var CLOUD_SCRIPT = "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
-function cloudHook(throttle) {
-  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
-  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
-}
-function printCloudSetup(deviceToken) {
-  const hook = (throttle) => [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: cloudHook(throttle),
-          timeout: 20,
-          async: true
-        }
-      ]
-    }
-  ];
-  const settings = {
-    hooks: {
-      SessionStart: hook(0),
-      UserPromptSubmit: hook(120),
-      PostToolUse: hook(120),
-      SubagentStop: hook(120),
-      Stop: hook(0),
-      SessionEnd: hook(0)
-    }
-  };
-  console.log("");
-  console.log("  Approved. Three steps in Claude Code on the web:");
-  console.log("");
-  console.log("  1. In the cloud environment's settings, add this environment variable:");
-  console.log("");
-  console.log(`     INLINR_TOKEN=${deviceToken}`);
-  console.log("");
-  console.log("  2. In the same settings, set network access to Custom, add inlinr.com,");
-  console.log("     and keep the default list of package managers.");
-  console.log("");
-  console.log("  3. Merge this into .claude/settings.json in each repository you work on:");
-  console.log("");
-  console.log(JSON.stringify(settings, null, 2).split(`
-`).map((l) => `     ${l}`).join(`
-`));
-  console.log("");
-  console.log("  Keep the token private: anyone using the environment can read it.");
-  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
 }
 
 // src/commands/activate.ts
@@ -676,7 +662,13 @@ async function activate(config, {
   replace = false,
   editor = "claude-code"
 } = {}) {
-  const current = cloud ? null : connection(config);
+  if (cloud || process.env.CLAUDE_CODE_REMOTE === "true") {
+    console.log("");
+    for (const line of cloudSteps(config.apiUrl))
+      console.log(`  ${line}`);
+    return 0;
+  }
+  const current = connection(config);
   if (current && current.from !== "env" && !replace) {
     const state = await checkToken(config.apiUrl, current.token);
     if (state === "unreachable") {
@@ -701,10 +693,10 @@ async function activate(config, {
       return 0;
     }
   }
-  const init = await startDeviceFlow(config.apiUrl, cloud ? "Claude Code cloud" : hostname(), cloud ? "linux" : process.platform, editor);
+  const init = await startDeviceFlow(config.apiUrl, hostname(), process.platform, editor);
   openBrowser(init.verification_uri_complete);
   console.log("");
-  console.log(cloud ? "  Approve Claude Code cloud in the browser tab that just opened." : "  Approve this machine in the browser tab that just opened.");
+  console.log("  Approve this machine in the browser tab that just opened.");
   console.log(`  If it did not open: ${init.verification_uri_complete}`);
   console.log("");
   console.log(`  The code, if it asks: ${init.user_code}`);
@@ -716,10 +708,6 @@ async function activate(config, {
     delay = wait;
     const result = await pollDeviceToken(config.apiUrl, init.device_code);
     if (result.status === "ok") {
-      if (cloud) {
-        printCloudSetup(result.token);
-        return 0;
-      }
       const previous = new Set([config.deviceToken, machineToken()].filter(Boolean));
       saveMachineToken(result.token);
       save({
@@ -885,7 +873,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.7.0";
+var VERSION = "0.7.1";
 
 // src/failure.ts
 var logPath = () => join5(configDir(), "claude-code.log");
@@ -931,6 +919,15 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
   }
   return null;
 }
+function cloudNotice(state, settingsUrl) {
+  const why = state === "refused" ? "inlinr.com refused this cloud environment's setup line (revoked, or made by another claude.ai account), so this session is not tracked." : "this Claude Code cloud session is not tracked by inlinr (time tracking), because its environment has no inlinr setup line.";
+  return [
+    `inlinr: ${why}`,
+    "Mention this to the user once, briefly, at a natural point in your first reply.",
+    `To track every session of this environment: open ${settingsUrl}, choose Add device then Get the setup line, and paste it into the Setup script of this cloud environment (claude.ai/code, the gear beside the environment), adding inlinr.com to its allowed domains if its network access is Custom.`,
+    "Never ask the user to paste the line or a token into this chat."
+  ].join(" ");
+}
 function sharedConnectionNotice() {
   return [
     "inlinr (time tracking plugin) now tracks Claude Code sessions on this machine, using the connection the inlinr extension or CLI made here (one connection per machine).",
@@ -949,13 +946,19 @@ function lastLogLine() {
     return null;
   }
 }
+function cloudSessionNotice(connected, apiUrl) {
+  const url = cloudSettingsUrl(apiUrl);
+  if (!connected)
+    return cloudNotice("no-token", url);
+  const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
+  const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
+  return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000 ? cloudNotice("refused", url) : null;
+}
 function sessionCheck(config) {
-  if (process.env.CLAUDE_CODE_REMOTE === "true")
-    return 0;
   if (config.paused)
     return 0;
   const source = tokenSource(config);
-  const notice = source?.from === "machine" && !config.lastParsedAt ? sharedConnectionNotice() : sessionNotice(Boolean(source), lastLogLine());
+  const notice = process.env.CLAUDE_CODE_REMOTE === "true" ? cloudSessionNotice(Boolean(source), config.apiUrl) : source?.from === "machine" && !config.lastParsedAt ? sharedConnectionNotice() : sessionNotice(Boolean(source), lastLogLine());
   if (notice) {
     console.log(JSON.stringify({
       hookSpecificOutput: {
