@@ -26,6 +26,7 @@ const ok =
 
 let home = "";
 let envToken: string | undefined;
+let envRemote: string | undefined;
 let realHome: string | undefined;
 let calls: string[] = [];
 let answers: Record<string, () => Response> = {};
@@ -44,6 +45,9 @@ beforeEach(() => {
   process.env.CODEX_HOME = home;
   envToken = process.env.INLINR_TOKEN;
   delete process.env.INLINR_TOKEN;
+  // These tests are a laptop, even when run inside a cloud session.
+  envRemote = process.env.CLAUDE_CODE_REMOTE;
+  delete process.env.CLAUDE_CODE_REMOTE;
   calls = [];
   answers = { "/api/v1/heartbeats": ok({ accepted: 0 }) };
   globalThis.fetch = (async (
@@ -68,6 +72,7 @@ afterEach(() => {
   delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.CODEX_HOME;
   if (envToken !== undefined) process.env.INLINR_TOKEN = envToken;
+  if (envRemote !== undefined) process.env.CLAUDE_CODE_REMOTE = envRemote;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -221,4 +226,14 @@ test("INLINR_HOME moves the folder in tests only", () => {
   } finally {
     process.env.NODE_ENV = env;
   }
+});
+
+test("in a cloud session, activating signs nothing in and points at the setup line", async () => {
+  process.env.CLAUDE_CODE_REMOTE = "true";
+  const printed: string[] = [];
+  console.log = (line: string) => printed.push(line);
+  expect(await activate(load())).toBe(0);
+  expect(calls).toEqual([]);
+  expect(printed.join("\n")).toContain("Get the setup line");
+  expect(machineToken()).toBe("");
 });

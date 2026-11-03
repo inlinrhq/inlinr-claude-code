@@ -1,82 +1,54 @@
 /**
- * `activate --cloud`: what a Claude Code cloud session needs to be tracked.
+ * `activate --cloud`: how Claude Code cloud sessions get tracked.
+ *
+ * A cloud session installs no plugin, starts in a fresh container and often
+ * outside any repository (a project's threads). What runs in every container
+ * is the environment's setup script, so tracking is one line there, made in
+ * inlinr's Settings → Editors: it downloads this bundle from inlinr.com,
+ * checks its hash, saves a token of its own and installs the hooks.
+ *
+ * Nothing here asks for a token. A token printed in a session ends up in its
+ * transcript, so the line is only ever shown on inlinr.com, to its owner.
  */
 
-/**
- * The URL of this build, for a cloud session to fetch.
- *
- * GitHub is reachable from a cloud session by default; inlinr.com has to be
- * added to the environment's network allowlist either way, for the beats.
- */
-const CLOUD_SCRIPT =
-  "https://raw.githubusercontent.com/inlinrhq/inlinr-claude-code/main/dist/index.js";
+import { createHash } from "node:crypto";
 
-/**
- * A hook for a repository's own `.claude/settings.json`.
- *
- * A cloud session does not install plugins, not even the ones a repository
- * enables, but it does run the hooks a repository declares. So the cloud
- * runs the same script through a hook committed to the repository.
- *
- * It does nothing on a laptop (`CLAUDE_CODE_REMOTE` is only set in the
- * cloud), where the plugin already runs: two copies reading the same
- * transcripts against one state file would send everything twice.
- */
-export function cloudHook(throttle: number): string {
-  const run = `f=/tmp/inlinr-claude-code.js; [ -s "$f" ] || curl -fsSL ${CLOUD_SCRIPT} -o "$f"; node "$f"`;
-  return `[ "$CLAUDE_CODE_REMOTE" = true ] || exit 0; ${run}${throttle ? ` --throttle ${throttle}` : ""}`;
+/** Where the line is made. */
+export function cloudSettingsUrl(apiUrl: string): string {
+  return `${apiUrl}/dashboard/settings?section=editors`;
 }
 
-export function printCloudSetup(deviceToken: string): void {
-  const hook = (throttle: number) => [
-    {
-      hooks: [
-        {
-          type: "command",
-          command: cloudHook(throttle),
-          timeout: 20,
-          async: true,
-        },
-      ],
-    },
+export function cloudSteps(apiUrl: string): string[] {
+  return [
+    "To track Claude Code on the web, once per cloud environment:",
+    "",
+    `  1. Open ${cloudSettingsUrl(apiUrl)}, choose Add device, then Get the setup line.`,
+    "  2. On claude.ai/code, open the settings of a cloud environment only you use",
+    "     (the gear beside it) and paste the line into Setup script.",
+    "     If its network access is Custom, add inlinr.com to the allowed domains.",
+    "",
+    "Every session in that environment is then tracked, in every repository.",
+    "The line holds a token: it stays on inlinr.com and in the environment's",
+    "settings, never in a repository or a chat.",
   ];
-  const settings = {
-    hooks: {
-      SessionStart: hook(0),
-      UserPromptSubmit: hook(120),
-      PostToolUse: hook(120),
-      SubagentStop: hook(120),
-      Stop: hook(0),
-      SessionEnd: hook(0),
-    },
+}
+
+/**
+ * The SHA-256 of the Anthropic account a cloud session runs for, sent as
+ * `x-inlinr-cloud-account`: inlinr binds a cloud line to the first account
+ * that uses it and refuses the others, so a line in an environment several
+ * people use never files their work under its owner. The account id itself
+ * never leaves the container. Empty outside the cloud.
+ */
+export function cloudAccountHeader(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  if (env.CLAUDE_CODE_REMOTE !== "true") return {};
+  const account = env.CLAUDE_CODE_ACCOUNT_UUID?.trim();
+  if (!account) return {};
+  return {
+    "x-inlinr-cloud-account": createHash("sha256")
+      .update(account)
+      .digest("hex"),
   };
-  console.log("");
-  console.log("  Approved. Three steps in Claude Code on the web:");
-  console.log("");
-  console.log(
-    "  1. In the cloud environment's settings, add this environment variable:",
-  );
-  console.log("");
-  console.log(`     INLINR_TOKEN=${deviceToken}`);
-  console.log("");
-  console.log(
-    "  2. In the same settings, set network access to Custom, add inlinr.com,",
-  );
-  console.log("     and keep the default list of package managers.");
-  console.log("");
-  console.log(
-    "  3. Merge this into .claude/settings.json in each repository you work on:",
-  );
-  console.log("");
-  console.log(
-    JSON.stringify(settings, null, 2)
-      .split("\n")
-      .map((l) => `     ${l}`)
-      .join("\n"),
-  );
-  console.log("");
-  console.log(
-    "  Keep the token private: anyone using the environment can read it.",
-  );
-  console.log("  Remove the device from Settings on inlinr.com to revoke it.");
 }

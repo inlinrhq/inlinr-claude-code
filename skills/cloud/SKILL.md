@@ -3,24 +3,16 @@ name: cloud
 description: Track Claude Code cloud (web) sessions on inlinr. Use when the user asks to track cloud or web sessions.
 ---
 
-Run this exact command **in the background** (it waits for the user, which can
-take minutes, and a foreground command shows nothing until it ends):
+Run this exact command:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" activate --cloud
 ```
 
-As soon as it has printed its link and code (a second or two), read its output
-and give the user the link and the code right away. Tell them to open the link
-and approve it. Then wait for the command to finish and show the rest of its
-output.
+It returns at once and prints the steps: get the setup line in inlinr's
+Settings → Editors, then paste it into the Setup script of a cloud environment
+the user alone uses, on claude.ai/code. Give the user those steps and the link.
 
-Once it finishes it prints the three steps that make cloud sessions report to
-inlinr: an environment variable, a network allowlist entry, and a hook to add
-to each repository's `.claude/settings.json`.
-
-Cloud sessions do not install plugins, which is why the hook goes in the
-repository. Offer to add that block to this repository's
-`.claude/settings.json`, merging it with any hooks already there. Do not write
-the token into any file in the repository: it belongs in the environment's
-settings only.
+The line holds a token. Never ask the user to paste it, or any token, into
+this chat, and never write it into a file of the repository: it belongs in the
+environment's settings only.
