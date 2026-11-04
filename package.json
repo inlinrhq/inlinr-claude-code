@@ -1,11 +1,11 @@
 {
   "name": "@inlinr/claude-code",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Track time, tokens and AI-written lines from Claude Code",
   "type": "module",
   "scripts": {
-    "build": "bun build src/index.ts --target=node --outfile=dist/index.js",
+    "build": "bun build src/index.ts --target=node --outfile=plugin/dist/index.js && node scripts/copy-bundle.mjs",
     "test": "bun test",
     "check": "node scripts/check-version.mjs && bunx tsc --noEmit",
     "check-version": "node scripts/check-version.mjs"
