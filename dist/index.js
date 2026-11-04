@@ -467,6 +467,13 @@ function cloudAccountHeader(env = process.env) {
     "x-inlinr-cloud-account": createHash2("sha256").update(account).digest("hex")
   };
 }
+var SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function cloudSession(env = process.env) {
+  if (env.CLAUDE_CODE_REMOTE !== "true")
+    return null;
+  const id = env.CLAUDE_CODE_SESSION_ID?.trim() ?? "";
+  return SESSION_ID.test(id) ? id.toLowerCase() : null;
+}
 
 // src/api.ts
 async function startDeviceFlow(apiUrl, hostname, platform, editor = "claude-code") {
@@ -602,7 +609,8 @@ function toHeartbeats(session, resolve, pluginVersion) {
   return beats.sort((a, b) => a.time - b.time);
 }
 var MAX_BATCH = 1000;
-async function sendHeartbeats(apiUrl, token, beats) {
+async function sendHeartbeats(apiUrl, as, beats) {
+  const auth = typeof as === "string" ? { authorization: `Bearer ${as}` } : ("token" in as) ? { authorization: `Bearer ${as.token}` } : { "x-inlinr-session": as.session };
   let accepted = 0;
   for (let i = 0;i < beats.length; i += MAX_BATCH) {
     const chunk = beats.slice(i, i + MAX_BATCH);
@@ -610,7 +618,7 @@ async function sendHeartbeats(apiUrl, token, beats) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${token}`,
+        ...auth,
         ...cloudAccountHeader()
       },
       body: JSON.stringify(chunk)
@@ -873,7 +881,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.7.1";
+var VERSION = "0.8.0";
 
 // src/failure.ts
 var logPath = () => join5(configDir(), "claude-code.log");
@@ -1632,7 +1640,8 @@ function repoResolver() {
 async function sync(config, throttleSeconds) {
   const source = tokenSource(config);
   const deviceToken = source?.token ?? "";
-  if (!deviceToken) {
+  const session = deviceToken || config.paused ? null : cloudSession();
+  if (!deviceToken && !session) {
     return 0;
   }
   if (source?.from === "plugin" && !machineToken()) {
@@ -1642,7 +1651,7 @@ async function sync(config, throttleSeconds) {
       save(config, "set");
     } catch {}
   }
-  const tag = tokenTag(deviceToken);
+  const tag = tokenTag(deviceToken || `session:${session}`);
   const otherToken = config.tokenTag != null && config.tokenTag !== tag;
   if (!config.lastParsedAt || otherToken) {
     save({
@@ -1714,7 +1723,13 @@ async function sync(config, throttleSeconds) {
     beats.push(...toHeartbeats(session, resolve, VERSION));
   }
   if (beats.length > 0) {
-    await sendHeartbeats(config.apiUrl, deviceToken, beats);
+    try {
+      await sendHeartbeats(config.apiUrl, deviceToken ? { token: deviceToken } : { session: session ?? "" }, beats);
+    } catch (err) {
+      if (session && err.status === 401)
+        return 0;
+      throw err;
+    }
   }
   save({
     ...config,

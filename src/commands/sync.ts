@@ -19,6 +19,7 @@ import { repoResolver } from "../repo";
 import { hasNew, readFrom, sessionFiles } from "../sessions";
 import { isEmpty, parseTranscript, type Session } from "../transcript";
 import { VERSION } from "../version";
+import { cloudSession } from "./cloud";
 
 export async function sync(
   config: Config,
@@ -26,7 +27,11 @@ export async function sync(
 ): Promise<number> {
   const source = tokenSource(config);
   const deviceToken = source?.token ?? "";
-  if (!deviceToken) {
+  // No token: a cloud session can still send as itself, once the inlinr
+  // connector claimed it (inlinr-web, docs/domain/tracking.md, "Claimed
+  // cloud sessions"). Not while this plugin is paused.
+  const session = deviceToken || config.paused ? null : cloudSession();
+  if (!deviceToken && !session) {
     // Silent on purpose. A hook firing on every tool call must not print an
     // error into somebody's session because they have not activated yet.
     return 0;
@@ -48,7 +53,9 @@ export async function sync(
     }
   }
 
-  const tag = tokenTag(deviceToken);
+  // A session's id stands for the token: a new session in the same
+  // container starts from its own first hook.
+  const tag = tokenTag(deviceToken || `session:${session}`);
   const otherToken = config.tokenTag != null && config.tokenTag !== tag;
   if (!config.lastParsedAt || otherToken) {
     // A token never activated by this plugin: from the environment, or the
@@ -137,7 +144,19 @@ export async function sync(
   // Positions are saved only once the beats have landed. A failed send
   // throws past this point, and the next sync reads the same lines again.
   if (beats.length > 0) {
-    await sendHeartbeats(config.apiUrl, deviceToken, beats);
+    try {
+      await sendHeartbeats(
+        config.apiUrl,
+        deviceToken ? { token: deviceToken } : { session: session ?? "" },
+        beats,
+      );
+    } catch (err) {
+      // A session nobody claimed (no connector, or its hook has not run
+      // yet) is refused: nothing to log, and the same lines are read again
+      // at the next hook, once the claim may have landed.
+      if (session && (err as { status?: number }).status === 401) return 0;
+      throw err;
+    }
   }
 
   save({
