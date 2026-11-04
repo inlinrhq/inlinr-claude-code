@@ -913,7 +913,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.8.1";
+var VERSION = "0.8.2";
 
 // src/failure.ts
 var logPath = () => join6(configDir(), "claude-code.log");
@@ -967,7 +967,7 @@ function cloudNotice(state, settingsUrl) {
     "Mention this to the user once, briefly, at a natural point in your first reply.",
     state === "refused" ? `To track this environment again: ${line}` : [
       "Two ways to track it.",
-      `If you have a tool from an MCP server named inlinr (claim_session), the inlinr connector is already added: the user only needs to install the inlinr-cloud plugin from the inlinr marketplace, next to this one, and every cloud session is tracked with no token.`,
+      `If you have a tool from an MCP server named inlinr (claim_session), the inlinr connector is already added: the user only needs to add the inlinr-cloud plugin to their claude.ai account, next to this one (from the inlinr marketplace, github.com/inlinrhq/inlinr-claude-code), and every cloud session is tracked with no token.`,
       `Otherwise, either add the inlinr connector on claude.ai (Settings, Connectors, a custom connector named inlinr with the URL https://inlinr.com/api/mcp) and install inlinr-cloud, or ${line}`
     ].join(" "),
     "Never ask the user to paste the line or a token into this chat."

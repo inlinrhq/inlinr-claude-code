@@ -440,6 +440,9 @@ import { dirname } from "node:path";
 
 // src/commands/cloud.ts
 import { createHash as createHash2 } from "node:crypto";
+import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
 function cloudSettingsUrl(apiUrl) {
   return `${apiUrl}/dashboard/settings?section=editors`;
 }
@@ -473,6 +476,35 @@ function cloudSession(env = process.env) {
     return null;
   const id = env.CLAUDE_CODE_SESSION_ID?.trim() ?? "";
   return SESSION_ID.test(id) ? id.toLowerCase() : null;
+}
+function companionInstalled(claudeDir) {
+  const plugins = join4(claudeDir, "plugins");
+  try {
+    const installed = JSON.parse(readFileSync4(join4(plugins, "installed_plugins.json"), "utf8"));
+    if (Object.keys(installed.plugins ?? {}).some((k) => k.startsWith(`${COMPANION}@`)))
+      return true;
+  } catch {}
+  for (const bucket of list2(join4(plugins, "synced"))) {
+    for (const plugin of list2(join4(plugins, "synced", bucket))) {
+      try {
+        const manifest = JSON.parse(readFileSync4(join4(plugins, "synced", bucket, plugin, ".claude-plugin", "plugin.json"), "utf8"));
+        if (manifest.name === COMPANION)
+          return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+var COMPANION = "inlinr-cloud";
+function list2(dir) {
+  try {
+    return readdirSync2(dir);
+  } catch {
+    return [];
+  }
+}
+function claudeDir(env = process.env) {
+  return env.CLAUDE_CONFIG_DIR?.trim() || join4(homedir3(), ".claude");
 }
 
 // src/api.ts
@@ -789,16 +821,16 @@ async function deactivate(config, mode) {
 }
 
 // src/commands/session-check.ts
-import { readFileSync as readFileSync6 } from "node:fs";
+import { readFileSync as readFileSync7 } from "node:fs";
 
 // src/failure.ts
-import { appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync5 } from "node:fs";
-import { join as join5 } from "node:path";
+import { appendFileSync, mkdirSync as mkdirSync4, readFileSync as readFileSync6 } from "node:fs";
+import { join as join6 } from "node:path";
 
 // src/report.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join4 } from "node:path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { join as join5 } from "node:path";
 var RESEND_AFTER_MS = 24 * 60 * 60 * 1000;
 var FORGET_AFTER_MS = 7 * RESEND_AFTER_MS;
 var TIMEOUT_MS = 3000;
@@ -823,7 +855,7 @@ function isServersOrNetworks(err) {
   const code = err.code;
   return typeof code === "string" && /^(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_)/.test(code);
 }
-function scrubHome(text, home = homedir3()) {
+function scrubHome(text, home = homedir4()) {
   if (home.length < 3)
     return text;
   return text.split(home).join("~").split(home.replace(/\\/g, "/")).join("~");
@@ -834,7 +866,7 @@ ${message.replace(/\d{4,}/g, "#")}`;
 }
 function readSent(path) {
   try {
-    const raw = JSON.parse(readFileSync4(path, "utf8"));
+    const raw = JSON.parse(readFileSync5(path, "utf8"));
     return raw && typeof raw === "object" ? raw : {};
   } catch {
     return {};
@@ -858,7 +890,7 @@ async function reportError(context, err, opts) {
         delete sent[k];
     }
     try {
-      mkdirSync3(join4(opts.statePath, ".."), { recursive: true });
+      mkdirSync3(join5(opts.statePath, ".."), { recursive: true });
       writeFileSync3(opts.statePath, JSON.stringify(sent), { mode: 384 });
     } catch {}
     const body = JSON.stringify({
@@ -881,10 +913,10 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.8.1";
+var VERSION = "0.8.2";
 
 // src/failure.ts
-var logPath = () => join5(configDir(), "claude-code.log");
+var logPath = () => join6(configDir(), "claude-code.log");
 function logFailure(err) {
   try {
     const line = `${new Date().toISOString()} ${err?.message ?? String(err)}
@@ -896,13 +928,13 @@ function logFailure(err) {
 async function reportFailure(err) {
   let configToml = null;
   try {
-    configToml = readFileSync5(join5(configDir(), "config.toml"), "utf8");
+    configToml = readFileSync6(join6(configDir(), "config.toml"), "utf8");
   } catch {}
   await reportError("sync", err, {
     apiUrl: load().apiUrl,
     version: VERSION,
     enabled: reportsEnabled(process.env, configToml),
-    statePath: join5(configDir(), "error-reports-claude-code.json")
+    statePath: join6(configDir(), "error-reports-claude-code.json")
   });
 }
 
@@ -928,11 +960,16 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
   return null;
 }
 function cloudNotice(state, settingsUrl) {
-  const why = state === "refused" ? "inlinr.com refused this cloud environment's setup line (revoked, or made by another claude.ai account), so this session is not tracked." : "this Claude Code cloud session is not tracked by inlinr (time tracking), because its environment has no inlinr setup line.";
+  const why = state === "refused" ? "inlinr.com refused this cloud environment's setup line (revoked, or made by another claude.ai account), so this session is not tracked." : "this Claude Code cloud session is not tracked by inlinr (time tracking): its environment has no inlinr setup line, and the inlinr-cloud plugin is not installed.";
+  const line = `open ${settingsUrl}, choose Add device then Get the setup line, and paste it into the Setup script of this cloud environment (claude.ai/code, the gear beside the environment), adding inlinr.com to its allowed domains if its network access is Custom.`;
   return [
     `inlinr: ${why}`,
     "Mention this to the user once, briefly, at a natural point in your first reply.",
-    `To track every session of this environment: open ${settingsUrl}, choose Add device then Get the setup line, and paste it into the Setup script of this cloud environment (claude.ai/code, the gear beside the environment), adding inlinr.com to its allowed domains if its network access is Custom.`,
+    state === "refused" ? `To track this environment again: ${line}` : [
+      "Two ways to track it.",
+      `If you have a tool from an MCP server named inlinr (claim_session), the inlinr connector is already added: the user only needs to add the inlinr-cloud plugin to their claude.ai account, next to this one (from the inlinr marketplace, github.com/inlinrhq/inlinr-claude-code), and every cloud session is tracked with no token.`,
+      `Otherwise, either add the inlinr connector on claude.ai (Settings, Connectors, a custom connector named inlinr with the URL https://inlinr.com/api/mcp) and install inlinr-cloud, or ${line}`
+    ].join(" "),
     "Never ask the user to paste the line or a token into this chat."
   ].join(" ");
 }
@@ -947,7 +984,7 @@ function sharedConnectionNotice() {
 // src/commands/session-check.ts
 function lastLogLine() {
   try {
-    const lines = readFileSync6(logPath(), "utf8").trim().split(`
+    const lines = readFileSync7(logPath(), "utf8").trim().split(`
 `);
     return lines[lines.length - 1] || null;
   } catch {
@@ -957,7 +994,7 @@ function lastLogLine() {
 function cloudSessionNotice(connected, apiUrl) {
   const url = cloudSettingsUrl(apiUrl);
   if (!connected)
-    return cloudNotice("no-token", url);
+    return companionInstalled(claudeDir()) ? null : cloudNotice("no-token", url);
   const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
   const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
   return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000 ? cloudNotice("refused", url) : null;
@@ -1005,15 +1042,15 @@ import { hostname as hostname2 } from "node:os";
 import {
   closeSync as closeSync2,
   openSync as openSync2,
-  readdirSync as readdirSync2,
+  readdirSync as readdirSync3,
   readSync,
   statSync as statSync3
 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { join as join6 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+import { join as join7 } from "node:path";
 function claudeProjectsDir() {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join6(override || join6(homedir4(), ".claude"), "projects");
+  return join7(override || join7(homedir5(), ".claude"), "projects");
 }
 function transcripts() {
   const root = claudeProjectsDir();
@@ -1021,12 +1058,12 @@ function transcripts() {
   const walk = (dir, subagent) => {
     let entries;
     try {
-      entries = readdirSync2(dir, { withFileTypes: true, encoding: "utf8" });
+      entries = readdirSync3(dir, { withFileTypes: true, encoding: "utf8" });
     } catch {
       return;
     }
     for (const e of entries) {
-      const full = join6(dir, e.name);
+      const full = join7(dir, e.name);
       if (e.isDirectory()) {
         if (e.name === "tool-results")
           continue;
