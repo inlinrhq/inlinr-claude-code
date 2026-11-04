@@ -12,11 +12,7 @@
   "homepage": "https://inlinr.com",
   "repository": "https://github.com/inlinrhq/inlinr-claude-code",
   "license": "BSD-3-Clause",
-  "keywords": [
-    "time tracking",
-    "inlinr",
-    "cloud"
-  ],
+  "keywords": ["time tracking", "inlinr", "cloud"],
   "privacyPolicyUrl": "https://inlinr.com/privacy",
   "termsOfServiceUrl": "https://inlinr.com/terms"
 }
