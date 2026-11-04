@@ -150,15 +150,21 @@ its transcript.
 
 ### With the inlinr connector (0.8.0, no token anywhere)
 
-With the plugin installed from the plugin directory, the setup line can be
-replaced by the inlinr connector: on claude.ai, Settings → Connectors, add a
-custom connector named `inlinr` with the URL `https://inlinr.com/api/mcp`, and
-allow it on inlinr.com. Then, in each cloud session, the plugin's hooks call
-the connector's `claim_session` with the session id (on each prompt and when
-Claude stops), and the sync sends the session's beats with that id in
+The setup line can be replaced by the inlinr connector:
+
+1. On claude.ai, Settings → Connectors, add a custom connector named `inlinr`
+   with the URL `https://inlinr.com/api/mcp`, and allow it on inlinr.com.
+2. Install this plugin and its companion `inlinr-cloud` (same marketplace).
+
+In each cloud session, `inlinr-cloud`'s hook calls the connector's
+`claim_session` with the session id (on each prompt and when Claude stops),
+and this plugin's sync sends the session's beats with that id in
 `x-inlinr-session` instead of a token. inlinr.com accepts them for 24 hours
 after the last claim, for your account only. No token is ever in the
 container; disconnect the connector in Settings → Editors on inlinr.com.
+
+The hook lives in a plugin of its own because a hook naming a connector you
+have not added shows "MCP server 'inlinr' not connected" on every turn.
 
 `INLINR_TOKEN` still works on any machine nobody activates by hand, such as a
 CI runner: it is used only when the machine has no token of its own. The older

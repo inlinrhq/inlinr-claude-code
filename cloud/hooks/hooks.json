@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "inlinr",
+            "tool": "claim_session",
+            "input": {
+              "session_id": "${session_id}"
+            }
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "inlinr",
+            "tool": "claim_session",
+            "input": {
+              "session_id": "${session_id}"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

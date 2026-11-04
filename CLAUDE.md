@@ -44,6 +44,7 @@ src/config.ts     # ~/.inlinr/claude-code.json (read positions), the machine's t
 src/notice.ts     # what SessionStart tells Claude when the machine is not connected
 src/report.ts     # own failures → POST /api/v1/plugin-errors
 dist/index.js     # the committed bundle Claude Code actually runs
+cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim_session)
 ```
 
 ## How it runs
