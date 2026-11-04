@@ -22,14 +22,14 @@ async function cloudSessionNotice(
   apiUrl: string,
 ): Promise<string | null> {
   const url = cloudSettingsUrl(apiUrl);
-  const tracked = connected || companionInstalled(claudeDir());
-  if (!tracked) return cloudNotice("no-token", url);
-  // Set to send: by a token, or as a session the connector claims. Either
-  // way the beats leave from this container, and an environment's default
-  // network access does not let it reach inlinr.com. The claim still works
-  // (claude.ai calls the connector), so nothing else would ever say so.
+  // With inlinr-cloud, the connector tracks the session from outside the
+  // container (record_activity), whatever its network allows: nothing to
+  // say. The container's own beats, when they get through, only add to it.
+  if (companionInstalled(claudeDir())) return null;
+  if (!connected) return cloudNotice("no-token", url);
+  // A setup line's token: the beats leave from this container, and an
+  // environment's default network access does not let it reach inlinr.com.
   if (!(await reachable(apiUrl))) return cloudNotice("blocked", url);
-  if (!connected) return null;
   const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
   const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
   return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000

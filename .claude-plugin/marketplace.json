@@ -24,8 +24,8 @@
     {
       "name": "inlinr-cloud",
       "source": "./cloud",
-      "description": "With the inlinr connector on claude.ai: claims each Claude Code cloud session for your account, so the inlinr plugin tracks it with no token. Install both.",
-      "version": "0.1.0",
+      "description": "With the inlinr connector on claude.ai: tracks each Claude Code cloud session for your account, with no token and no network setting. Install both.",
+      "version": "0.2.0",
       "homepage": "https://inlinr.com",
       "repository": "https://github.com/inlinrhq/inlinr-claude-code",
       "license": "BSD-3-Clause",

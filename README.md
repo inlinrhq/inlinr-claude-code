@@ -148,35 +148,36 @@ in your claude.ai account) is told so at its start, with where to get the line.
 The line is never printed in a session: whatever is printed there goes into
 its transcript.
 
-### With the inlinr connector (0.8.0, no token anywhere)
+### With the inlinr connector (no token, no network setting)
 
 The setup line can be replaced by the inlinr connector:
 
 1. On claude.ai, Settings → Connectors, add a custom connector named `inlinr`
    with the URL `https://inlinr.com/api/mcp`, and allow it on inlinr.com.
 2. Install this plugin and its companion `inlinr-cloud` (same marketplace).
-3. In each cloud environment's settings, set the network access to Custom and
-   add `inlinr.com` to the allowed domains. The beats leave from the
-   container, and the default access does not reach inlinr.com.
 
-In each cloud session, `inlinr-cloud`'s hook calls the connector's
-`claim_session` with the session id (on each prompt and when Claude stops),
-and this plugin's sync sends the session's beats with that id in
-`x-inlinr-session` instead of a token. inlinr.com accepts them for 24 hours
-after the last claim, for your account only. No token is ever in the
-container; disconnect the connector in Settings → Editors on inlinr.com.
+`inlinr-cloud` (0.2.0) has `mcp_tool` hooks that call the connector's
+`record_activity`: on each prompt and when Claude stops, and after each Edit,
+Write or MultiEdit (the file's path, its GitHub repository, its line counts;
+never its content). claude.ai makes those calls, not the container, so the
+session is tracked even when its environment's network access does not allow
+inlinr.com, which is the default.
 
-The hook lives in a plugin of its own because a hook naming a connector you
+When the container does reach inlinr.com, this plugin also sends the
+session's own beats, with the session id in `x-inlinr-session` instead of a
+token; they add tokens, the model and the branch, and inlinr.com keeps them
+instead of the connector's. A claim lasts 24 hours after the last call, for
+your account only. No token is ever in the container; disconnect the
+connector in Settings → Editors on inlinr.com.
+
+The hooks live in a plugin of their own because a hook naming a connector you
 have not added shows "MCP server 'inlinr' not connected" on every turn.
 
 A cloud session that has this plugin but no token and no `inlinr-cloud` tells
 Claude so at its start: Claude offers to install `inlinr-cloud` when the
-connector is already there, or else the connector or the setup line.
-
-A cloud session set to send (a token, or `inlinr-cloud`) that cannot reach
-inlinr.com tells Claude at its start to add `inlinr.com` to the environment's
-allowed domains (0.8.3): before that, the session was claimed and its time
-silently never arrived.
+connector is already there, or else the connector or the setup line. A
+session tracked by a setup line that cannot reach inlinr.com says so too
+(0.8.3), and how to allow it.
 
 `INLINR_TOKEN` still works on any machine nobody activates by hand, such as a
 CI runner: it is used only when the machine has no token of its own. The older

@@ -6,10 +6,35 @@
           {
             "type": "mcp_tool",
             "server": "inlinr",
-            "tool": "claim_session",
+            "tool": "record_activity",
             "input": {
-              "session_id": "${session_id}"
-            }
+              "session_id": "${session_id}",
+              "event": "prompt",
+              "cwd": "${cwd}"
+            },
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "inlinr",
+            "tool": "record_activity",
+            "input": {
+              "session_id": "${session_id}",
+              "event": "edit",
+              "cwd": "${cwd}",
+              "file": "${tool_input.file_path}",
+              "repository": "${tool_response.gitDiff.repository}",
+              "additions": "${tool_response.gitDiff.additions}",
+              "deletions": "${tool_response.gitDiff.deletions}"
+            },
+            "timeout": 3
           }
         ]
       }
@@ -20,10 +45,13 @@
           {
             "type": "mcp_tool",
             "server": "inlinr",
-            "tool": "claim_session",
+            "tool": "record_activity",
             "input": {
-              "session_id": "${session_id}"
-            }
+              "session_id": "${session_id}",
+              "event": "stop",
+              "cwd": "${cwd}"
+            },
+            "timeout": 3
           }
         ]
       }

@@ -964,7 +964,7 @@ function cloudNotice(state, settingsUrl) {
     return [
       "inlinr: this Claude Code cloud session cannot reach inlinr.com (time tracking): the network access of its environment does not allow that domain, so its time is not sent.",
       "Mention this to the user once, briefly, at a natural point in your first reply.",
-      "To fix it: on claude.ai/code, open the settings of this cloud environment (the gear beside it), set its network access to Custom and add inlinr.com to the allowed domains. The next session is tracked."
+      "To fix it: on claude.ai/code, open the settings of this cloud environment (the gear beside it), set its network access to Custom and add inlinr.com to the allowed domains; the next session is tracked. Or, with no network setting at all: add the inlinr connector on claude.ai (Settings, Connectors, a custom connector named inlinr with the URL https://inlinr.com/api/mcp) and the inlinr-cloud plugin."
     ].join(" ");
   const why = state === "refused" ? "inlinr.com refused this cloud environment's setup line (revoked, or made by another claude.ai account), so this session is not tracked." : "this Claude Code cloud session is not tracked by inlinr (time tracking): its environment has no inlinr setup line, and the inlinr-cloud plugin is not installed.";
   const line = `open ${settingsUrl}, choose Add device then Get the setup line, and paste it into the Setup script of this cloud environment (claude.ai/code, the gear beside the environment), adding inlinr.com to its allowed domains if its network access is Custom.`;
@@ -999,13 +999,12 @@ function lastLogLine() {
 }
 async function cloudSessionNotice(connected, apiUrl) {
   const url = cloudSettingsUrl(apiUrl);
-  const tracked = connected || companionInstalled(claudeDir());
-  if (!tracked)
+  if (companionInstalled(claudeDir()))
+    return null;
+  if (!connected)
     return cloudNotice("no-token", url);
   if (!await reachable(apiUrl))
     return cloudNotice("blocked", url);
-  if (!connected)
-    return null;
   const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
   const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
   return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000 ? cloudNotice("refused", url) : null;
