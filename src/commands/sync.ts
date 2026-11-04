@@ -7,7 +7,6 @@ import {
   parseGemini,
 } from "../agents";
 import { sendHeartbeats, toHeartbeats } from "../api";
-import { cloudSession } from "./cloud";
 import {
   type Config,
   machineToken,
@@ -20,6 +19,7 @@ import { repoResolver } from "../repo";
 import { hasNew, readFrom, sessionFiles } from "../sessions";
 import { isEmpty, parseTranscript, type Session } from "../transcript";
 import { VERSION } from "../version";
+import { cloudSession } from "./cloud";
 
 export async function sync(
   config: Config,
