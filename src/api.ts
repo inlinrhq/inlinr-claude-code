@@ -294,11 +294,20 @@ export function toHeartbeats(
 /** The server's own limit. Sending more is a 400, not a slow request. */
 export const MAX_BATCH = 1000;
 
+/** How a batch is signed: a device token, or a claimed cloud session's id. */
+export type SendAs = { token: string } | { session: string };
+
 export async function sendHeartbeats(
   apiUrl: string,
-  token: string,
+  as: SendAs | string,
   beats: Heartbeat[],
 ): Promise<{ accepted: number }> {
+  const auth: Record<string, string> =
+    typeof as === "string"
+      ? { authorization: `Bearer ${as}` }
+      : "token" in as
+        ? { authorization: `Bearer ${as.token}` }
+        : { "x-inlinr-session": as.session };
   let accepted = 0;
   for (let i = 0; i < beats.length; i += MAX_BATCH) {
     const chunk = beats.slice(i, i + MAX_BATCH);
@@ -306,7 +315,7 @@ export async function sendHeartbeats(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${token}`,
+        ...auth,
         ...cloudAccountHeader(),
       },
       body: JSON.stringify(chunk),

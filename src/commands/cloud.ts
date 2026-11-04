@@ -52,3 +52,21 @@ export function cloudAccountHeader(
       .digest("hex"),
   };
 }
+
+const SESSION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The session a cloud container may send for with no token: its id, which
+ * the plugin's `mcp_tool` hooks give the inlinr connector (`claim_session`),
+ * so inlinr.com knows whose it is. Null outside a cloud session. The server
+ * accepts the beats only once the session is claimed: until then a sync is
+ * refused and its lines are read again next time.
+ */
+export function cloudSession(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (env.CLAUDE_CODE_REMOTE !== "true") return null;
+  const id = env.CLAUDE_CODE_SESSION_ID?.trim() ?? "";
+  return SESSION_ID.test(id) ? id.toLowerCase() : null;
+}

@@ -21,6 +21,14 @@
       {
         "hooks": [
           {
+            "type": "mcp_tool",
+            "server": "inlinr",
+            "tool": "claim_session",
+            "input": {
+              "session_id": "${session_id}"
+            }
+          },
+          {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/index.js\" --throttle 120",
             "timeout": 20,
@@ -68,6 +76,14 @@
     "Stop": [
       {
         "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "inlinr",
+            "tool": "claim_session",
+            "input": {
+              "session_id": "${session_id}"
+            }
+          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/index.js\"",
