@@ -12,6 +12,9 @@
  */
 
 import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /** Where the line is made. */
 export function cloudSettingsUrl(apiUrl: string): string {
@@ -69,4 +72,61 @@ export function cloudSession(
   if (env.CLAUDE_CODE_REMOTE !== "true") return null;
   const id = env.CLAUDE_CODE_SESSION_ID?.trim() ?? "";
   return SESSION_ID.test(id) ? id.toLowerCase() : null;
+}
+
+/**
+ * Whether `inlinr-cloud`, the companion plugin whose hook claims the session
+ * through the connector, is installed here: from a marketplace
+ * (`installed_plugins.json`, `cache/`) or synced from the claude.ai account
+ * into a cloud container (`synced/<bucket>/<plugin>/`, named by its own
+ * manifest, the folder having an id for a name).
+ */
+export function companionInstalled(claudeDir: string): boolean {
+  const plugins = join(claudeDir, "plugins");
+  try {
+    const installed = JSON.parse(
+      readFileSync(join(plugins, "installed_plugins.json"), "utf8"),
+    ) as { plugins?: Record<string, unknown> };
+    if (
+      Object.keys(installed.plugins ?? {}).some((k) =>
+        k.startsWith(`${COMPANION}@`),
+      )
+    )
+      return true;
+  } catch {}
+  for (const bucket of list(join(plugins, "synced"))) {
+    for (const plugin of list(join(plugins, "synced", bucket))) {
+      try {
+        const manifest = JSON.parse(
+          readFileSync(
+            join(
+              plugins,
+              "synced",
+              bucket,
+              plugin,
+              ".claude-plugin",
+              "plugin.json",
+            ),
+            "utf8",
+          ),
+        ) as { name?: unknown };
+        if (manifest.name === COMPANION) return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
+const COMPANION = "inlinr-cloud";
+
+function list(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+export function claudeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
 }
