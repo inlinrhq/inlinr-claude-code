@@ -17,12 +17,19 @@ function lastLogLine(): string | null {
  * A cloud session: the plugin runs there from the claude.ai account or a
  * setup line. Nothing to say when it has a token that works.
  */
-function cloudSessionNotice(connected: boolean, apiUrl: string): string | null {
+async function cloudSessionNotice(
+  connected: boolean,
+  apiUrl: string,
+): Promise<string | null> {
   const url = cloudSettingsUrl(apiUrl);
-  if (!connected)
-    return companionInstalled(claudeDir())
-      ? null
-      : cloudNotice("no-token", url);
+  // With inlinr-cloud, the connector tracks the session from outside the
+  // container (record_activity), whatever its network allows: nothing to
+  // say. The container's own beats, when they get through, only add to it.
+  if (companionInstalled(claudeDir())) return null;
+  if (!connected) return cloudNotice("no-token", url);
+  // A setup line's token: the beats leave from this container, and an
+  // environment's default network access does not let it reach inlinr.com.
+  if (!(await reachable(apiUrl))) return cloudNotice("blocked", url);
   const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
   const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
   return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000
@@ -30,13 +37,33 @@ function cloudSessionNotice(connected: boolean, apiUrl: string): string | null {
     : null;
 }
 
-export function sessionCheck(config: Config): number {
+/**
+ * Whether inlinr.com answers from here at all: any HTTP status will do.
+ * A domain the environment does not allow fails to resolve at once, so the
+ * wait is only for a slow network, and stays inside the hook's 5 s.
+ */
+export async function reachable(
+  apiUrl: string,
+  timeoutMs = 2500,
+): Promise<boolean> {
+  try {
+    await fetch(apiUrl, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function sessionCheck(config: Config): Promise<number> {
   // Paused on purpose: nothing to say.
   if (config.paused) return 0;
   const source = tokenSource(config);
   const notice =
     process.env.CLAUDE_CODE_REMOTE === "true"
-      ? cloudSessionNotice(Boolean(source), config.apiUrl)
+      ? await cloudSessionNotice(Boolean(source), config.apiUrl)
       : // The sync this hook starts next sets `lastParsedAt`: said once.
         source?.from === "machine" && !config.lastParsedAt
         ? sharedConnectionNotice()

@@ -913,7 +913,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.8.2";
+var VERSION = "0.8.3";
 
 // src/failure.ts
 var logPath = () => join6(configDir(), "claude-code.log");
@@ -960,6 +960,12 @@ function sessionNotice(connected, lastLogLine, now = Date.now()) {
   return null;
 }
 function cloudNotice(state, settingsUrl) {
+  if (state === "blocked")
+    return [
+      "inlinr: this Claude Code cloud session cannot reach inlinr.com (time tracking): the network access of its environment does not allow that domain, so its time is not sent.",
+      "Mention this to the user once, briefly, at a natural point in your first reply.",
+      "To fix it: on claude.ai/code, open the settings of this cloud environment (the gear beside it), set its network access to Custom and add inlinr.com to the allowed domains; the next session is tracked. Or, with no network setting at all: add the inlinr connector on claude.ai (Settings, Connectors, a custom connector named inlinr with the URL https://inlinr.com/api/mcp) and the inlinr-cloud plugin."
+    ].join(" ");
   const why = state === "refused" ? "inlinr.com refused this cloud environment's setup line (revoked, or made by another claude.ai account), so this session is not tracked." : "this Claude Code cloud session is not tracked by inlinr (time tracking): its environment has no inlinr setup line, and the inlinr-cloud plugin is not installed.";
   const line = `open ${settingsUrl}, choose Add device then Get the setup line, and paste it into the Setup script of this cloud environment (claude.ai/code, the gear beside the environment), adding inlinr.com to its allowed domains if its network access is Custom.`;
   return [
@@ -991,19 +997,34 @@ function lastLogLine() {
     return null;
   }
 }
-function cloudSessionNotice(connected, apiUrl) {
+async function cloudSessionNotice(connected, apiUrl) {
   const url = cloudSettingsUrl(apiUrl);
+  if (companionInstalled(claudeDir()))
+    return null;
   if (!connected)
-    return companionInstalled(claudeDir()) ? null : cloudNotice("no-token", url);
+    return cloudNotice("no-token", url);
+  if (!await reachable(apiUrl))
+    return cloudNotice("blocked", url);
   const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
   const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
   return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000 ? cloudNotice("refused", url) : null;
 }
-function sessionCheck(config) {
+async function reachable(apiUrl, timeoutMs = 2500) {
+  try {
+    await fetch(apiUrl, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function sessionCheck(config) {
   if (config.paused)
     return 0;
   const source = tokenSource(config);
-  const notice = process.env.CLAUDE_CODE_REMOTE === "true" ? cloudSessionNotice(Boolean(source), config.apiUrl) : source?.from === "machine" && !config.lastParsedAt ? sharedConnectionNotice() : sessionNotice(Boolean(source), lastLogLine());
+  const notice = process.env.CLAUDE_CODE_REMOTE === "true" ? await cloudSessionNotice(Boolean(source), config.apiUrl) : source?.from === "machine" && !config.lastParsedAt ? sharedConnectionNotice() : sessionNotice(Boolean(source), lastLogLine());
   if (notice) {
     console.log(JSON.stringify({
       hookSpecificOutput: {

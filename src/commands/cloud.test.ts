@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { cloudNotice } from "../notice";
 import { cloudAccountHeader, cloudSettingsUrl, cloudSteps } from "./cloud";
+import { reachable } from "./session-check";
 
 const TOKEN = /in_d_/;
 
@@ -37,5 +38,14 @@ describe("cloud", () => {
       expect(text).not.toMatch(TOKEN);
     }
     expect(cloudNotice("refused", url)).toContain("refused");
+    const blocked = cloudNotice("blocked", url);
+    expect(blocked).toContain("inlinr.com to the allowed domains");
+    expect(blocked).not.toMatch(TOKEN);
+  });
+});
+
+describe("reachable", () => {
+  it("is false for a host that does not resolve", async () => {
+    expect(await reachable("https://inlinr.invalid", 1000)).toBe(false);
   });
 });
