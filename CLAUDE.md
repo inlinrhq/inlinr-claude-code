@@ -83,8 +83,10 @@ cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim
   `INLINR_ERROR_REPORTS=0`, or Claude Code's `DISABLE_ERROR_REPORTING` /
   `DISABLE_TELEMETRY`.
 - Cloud sessions get the plugin when it is installed from Anthropic's
-  plugin directory (an uploaded plugin is not copied there), or through
-  inlinr.com's setup line, which runs the bundle pinned in inlinr-web.
+  plugin directory or uploaded to the claude.ai account (both are copied
+  into `~/.claude/plugins/synced/` as a container starts: seen on 4/11 for
+  an uploaded `inlinr-cloud`, whose hook ran there), or through inlinr.com's
+  setup line, which runs the bundle pinned in inlinr-web.
   Repository hooks of older releases download `dist/index.js` from `main`:
   **so `main`'s `dist/` is live for them the moment it merges.**
 - `plugin/` is the only folder the marketplace and the directory read. Dev

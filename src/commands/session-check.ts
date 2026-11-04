@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { type Config, tokenSource } from "../config";
 import { logPath } from "../failure";
 import { cloudNotice, sessionNotice, sharedConnectionNotice } from "../notice";
-import { cloudSettingsUrl } from "./cloud";
+import { claudeDir, cloudSettingsUrl, companionInstalled } from "./cloud";
 
 function lastLogLine(): string | null {
   try {
@@ -19,7 +19,10 @@ function lastLogLine(): string | null {
  */
 function cloudSessionNotice(connected: boolean, apiUrl: string): string | null {
   const url = cloudSettingsUrl(apiUrl);
-  if (!connected) return cloudNotice("no-token", url);
+  if (!connected)
+    return companionInstalled(claudeDir())
+      ? null
+      : cloudNotice("no-token", url);
   const m = lastLogLine()?.match(/^(\S+) .*HTTP 401/);
   const at = m?.[1] ? Date.parse(m[1]) : Number.NaN;
   return Number.isFinite(at) && Date.now() - at < 48 * 3600 * 1000

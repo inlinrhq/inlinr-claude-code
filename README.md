@@ -166,6 +166,10 @@ container; disconnect the connector in Settings → Editors on inlinr.com.
 The hook lives in a plugin of its own because a hook naming a connector you
 have not added shows "MCP server 'inlinr' not connected" on every turn.
 
+A cloud session that has this plugin but no token and no `inlinr-cloud` tells
+Claude so at its start: Claude offers to install `inlinr-cloud` when the
+connector is already there, or else the connector or the setup line.
+
 `INLINR_TOKEN` still works on any machine nobody activates by hand, such as a
 CI runner: it is used only when the machine has no token of its own. The older
 hooks block for a repository's `.claude/settings.json` is gone: it downloaded
