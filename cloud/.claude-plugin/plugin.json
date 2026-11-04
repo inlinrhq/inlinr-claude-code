@@ -14,6 +14,8 @@
   "license": "BSD-3-Clause",
   "icon": "./assets/icon.png",
   "keywords": ["time tracking", "inlinr", "cloud"],
+  "documentationUrl": "https://inlinr.com/guides/track-claude-code#cloud-connector",
+  "supportUrl": "https://github.com/inlinrhq/inlinr-claude-code/issues",
   "privacyPolicyUrl": "https://inlinr.com/privacy",
   "termsOfServiceUrl": "https://inlinr.com/terms"
 }
