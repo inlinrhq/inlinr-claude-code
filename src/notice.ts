@@ -41,9 +41,15 @@ export function sessionNotice(
  * session is tracked once its hook claims it.
  */
 export function cloudNotice(
-  state: "no-token" | "refused",
+  state: "no-token" | "refused" | "blocked",
   settingsUrl: string,
 ): string {
+  if (state === "blocked")
+    return [
+      "inlinr: this Claude Code cloud session cannot reach inlinr.com (time tracking): the network access of its environment does not allow that domain, so its time is not sent.",
+      "Mention this to the user once, briefly, at a natural point in your first reply.",
+      "To fix it: on claude.ai/code, open the settings of this cloud environment (the gear beside it), set its network access to Custom and add inlinr.com to the allowed domains. The next session is tracked.",
+    ].join(" ");
   const why =
     state === "refused"
       ? "inlinr.com refused this cloud environment's setup line (revoked, or made by another claude.ai account), so this session is not tracked."

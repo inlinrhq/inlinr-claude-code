@@ -155,6 +155,9 @@ The setup line can be replaced by the inlinr connector:
 1. On claude.ai, Settings → Connectors, add a custom connector named `inlinr`
    with the URL `https://inlinr.com/api/mcp`, and allow it on inlinr.com.
 2. Install this plugin and its companion `inlinr-cloud` (same marketplace).
+3. In each cloud environment's settings, set the network access to Custom and
+   add `inlinr.com` to the allowed domains. The beats leave from the
+   container, and the default access does not reach inlinr.com.
 
 In each cloud session, `inlinr-cloud`'s hook calls the connector's
 `claim_session` with the session id (on each prompt and when Claude stops),
@@ -169,6 +172,11 @@ have not added shows "MCP server 'inlinr' not connected" on every turn.
 A cloud session that has this plugin but no token and no `inlinr-cloud` tells
 Claude so at its start: Claude offers to install `inlinr-cloud` when the
 connector is already there, or else the connector or the setup line.
+
+A cloud session set to send (a token, or `inlinr-cloud`) that cannot reach
+inlinr.com tells Claude at its start to add `inlinr.com` to the environment's
+allowed domains (0.8.3): before that, the session was claimed and its time
+silently never arrived.
 
 `INLINR_TOKEN` still works on any machine nobody activates by hand, such as a
 CI runner: it is used only when the machine has no token of its own. The older
