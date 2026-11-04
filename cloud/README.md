@@ -1,5 +1,7 @@
 # inlinr-cloud
 
+Install: `/plugin install inlinr-cloud --marketplace inlinrhq/inlinr-claude-code`
+
 The companion of the `inlinr` plugin for Claude Code cloud sessions tracked
 through the inlinr connector, with no token anywhere.
 

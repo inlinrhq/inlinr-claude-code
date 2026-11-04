@@ -24,10 +24,12 @@ Sibling repos:
 ## Layout
 
 ```
-.claude-plugin/plugin.json       # plugin manifest (version)
-.claude-plugin/marketplace.json  # marketplace entry (version)
-hooks/hooks.json                 # when Claude Code runs us (see below)
-skills/{activate,status,deactivate,cloud}/SKILL.md   # the /inlinr:* commands
+.claude-plugin/marketplace.json  # marketplace: inlinr (./plugin) and inlinr-cloud (./cloud)
+plugin/           # what is published: the plugin tree, nothing else (see below)
+plugin/.claude-plugin/plugin.json # plugin manifest (version, directory listing fields)
+plugin/hooks/hooks.json           # when Claude Code runs us (see below)
+plugin/skills/{activate,status,deactivate,cloud,upgrade}/SKILL.md   # the /inlinr:* commands
+plugin/dist/index.js              # the committed bundle Claude Code actually runs
 src/index.ts      # entry: dispatches to a command, never breaks the turn on failure
 src/commands/     # one file per command: activate, cloud, deactivate, session-check, setup, status, sync
 src/sessions.ts   # every session file on the machine, what is new since the last read
@@ -43,13 +45,14 @@ src/api.ts        # device flow, heartbeat batches, revoke
 src/config.ts     # ~/.inlinr/claude-code.json (read positions), the machine's token in config.toml
 src/notice.ts     # what SessionStart tells Claude when the machine is not connected
 src/report.ts     # own failures → POST /api/v1/plugin-errors
-dist/index.js     # the committed bundle Claude Code actually runs
+dist/index.js     # the same bundle, copied by the build: inlinr.com pins it by commit,
+                  # and repository hooks of releases before 0.8.1 fetch it from main
 cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim_session)
 ```
 
 ## How it runs
 
-- `hooks/hooks.json` runs `dist/index.js` on SessionStart (a 5 s
+- `plugin/hooks/hooks.json` runs `plugin/dist/index.js` on SessionStart (a 5 s
   `session-check`, then a sync), UserPromptSubmit, PostToolUse and
   SubagentStop (throttled to 120 s), PreCompact, Stop and SessionEnd. Every
   sync hook is `async`: a tracker must never slow or break the turn it
@@ -79,11 +82,16 @@ cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim
   once a day per error, to Admin → Errors. Off with `error_reports = false`,
   `INLINR_ERROR_REPORTS=0`, or Claude Code's `DISABLE_ERROR_REPORTING` /
   `DISABLE_TELEMETRY`.
-- Cloud sessions do not install plugins: a repository's
-  `.claude/settings.json` hook downloads `dist/index.js` from this
-  repository's `main` and runs it only when `CLAUDE_CODE_REMOTE=true`, with
-  the token from `INLINR_TOKEN`. **So `main`'s `dist/` is live the moment it
-  merges.**
+- Cloud sessions get the plugin when it is installed from Anthropic's
+  plugin directory (an uploaded plugin is not copied there), or through
+  inlinr.com's setup line, which runs the bundle pinned in inlinr-web.
+  Repository hooks of older releases download `dist/index.js` from `main`:
+  **so `main`'s `dist/` is live for them the moment it merges.**
+- `plugin/` is the only folder the marketplace and the directory read. Dev
+  files (`package.json`, `bun.lock`, this file, `.claude/`) stay outside it:
+  a `package.json` with a lockfile in a plugin's folder makes Claude Code
+  run an install there on every user's machine, and the directory holds it
+  for review.
 - Codex and Gemini CLI files are read by the same sync, with their own
   state in `files` (`agent`). A Codex file is keyed by its name, not its
   path: archiving moves it. Without Claude Code, `setup` copies the bundle
@@ -98,10 +106,10 @@ cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim
 
 ## Releasing
 
-1. Change `src/`, then `bun run build`: CI fails when `dist/` does not match
-   `src/`.
+1. Change `src/`, then `bun run build` (writes `plugin/dist/index.js` and
+   copies it to `dist/index.js`): CI fails when either does not match `src/`.
 2. Bump the version in **four** places, which `scripts/check-version.mjs`
-   (CI) checks agree: `package.json`, `.claude-plugin/plugin.json`,
+   (CI) checks agree: `package.json`, `plugin/.claude-plugin/plugin.json`,
    `.claude-plugin/marketplace.json`, `const VERSION` in `src/version.ts`.
 3. Merge to `main`. Users get it through the marketplace (`autoUpdate`) and
    cloud hooks at once; there is no tag step. Describe the release in the PR

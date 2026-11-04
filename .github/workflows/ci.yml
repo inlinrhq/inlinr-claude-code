@@ -35,7 +35,7 @@ jobs:
       - name: dist/ matches src/
         run: |
           bun run build
-          git diff --exit-code -- dist/
+          git diff --exit-code -- dist/ plugin/dist/
 
       - uses: biomejs/setup-biome@v2
         with:

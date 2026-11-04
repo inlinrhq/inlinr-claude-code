@@ -881,7 +881,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.8.0";
+var VERSION = "0.8.1";
 
 // src/failure.ts
 var logPath = () => join5(configDir(), "claude-code.log");

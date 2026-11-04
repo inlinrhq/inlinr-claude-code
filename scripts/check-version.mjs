@@ -1,10 +1,10 @@
-// One version, three files. They drifted once already — plugin.json said 0.4.0
+// One version, four files. They drifted once already — plugin.json said 0.4.0
 // while marketplace.json still said 0.2.0, which is exactly what produces
 // "I installed it and nothing changed".
 import { readFileSync } from "node:fs";
 
 const read = (p) => JSON.parse(readFileSync(p, "utf8"));
-const plugin = read(".claude-plugin/plugin.json").version;
+const plugin = read("plugin/.claude-plugin/plugin.json").version;
 const market = read(".claude-plugin/marketplace.json").plugins[0].version;
 const pkg = read("package.json").version;
 const src = readFileSync("src/version.ts", "utf8").match(

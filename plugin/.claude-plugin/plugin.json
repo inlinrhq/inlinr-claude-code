@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "inlinr",
   "displayName": "inlinr",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Track time, tokens and AI-written lines from Claude Code, Codex and Gemini CLI on inlinr.com",
   "author": {
     "name": "inlinr",
