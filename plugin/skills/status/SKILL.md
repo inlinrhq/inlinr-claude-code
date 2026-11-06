@@ -12,8 +12,8 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" status
 It reports which build is running, whether this machine is connected, when a
 sync last happened, and how many transcripts are in scope.
 
-If it says the plugin is not connected, offer to connect it with the
-inlinr:activate skill.
+If it says the plugin is not connected, or that there are no hooks, offer
+to set it up with the inlinr:activate skill.
 
 If the user asks to update the plugin, or the version looks older than they
 expect, run:

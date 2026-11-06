@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
+import { hasClaudeCodeHooks } from "../agents/setup";
 import { type Config, machineToken, token, tokenSource } from "../config";
 import { logPath } from "../failure";
 import { hasNew, sessionFiles } from "../sessions";
 import type { AiTool } from "../transcript";
 import { VERSION } from "../version";
+import { claudeDir } from "./cloud";
 
 /**
  * Is this actually working?
@@ -43,6 +45,13 @@ export async function status(config: Config): Promise<number> {
       "              the inlinr extension and CLI here use another connection (two devices, maybe two accounts)",
     );
   }
+  console.log(
+    `  Hooks       ${
+      hasClaudeCodeHooks(claudeDir())
+        ? "in Claude Code's settings, every local session is tracked"
+        : "none — /inlinr:activate adds them to Claude Code's settings"
+    }`,
+  );
   console.log(`  Server      ${config.apiUrl}`);
   console.log(
     `  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`,

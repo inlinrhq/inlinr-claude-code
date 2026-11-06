@@ -30,8 +30,20 @@ Then, once, inside Claude Code:
 ```
 
 That prints a link, you approve it in the browser, and it saves a device token
-in `~/.inlinr`. That covers the machine: every session, every project, the
-terminal and the desktop app alike. There is nothing else to install.
+in `~/.inlinr`. Then it asks whether to add inlinr's hooks to your
+`~/.claude/settings.json`. That covers the machine: every session, every
+project, the terminal and the desktop app alike. There is nothing else to
+install.
+
+**The plugin declares no hook.** Since 0.9.0 nothing runs until you say so:
+Anthropic's plugin directory refuses a plugin whose hooks run a command on
+your machine without asking. On a yes, `/inlinr:activate` runs
+`setup claude-code`, which copies the script to `~/.inlinr/agents.js` and adds
+the seven hooks below to your user settings, marked `--from claude-code`, where
+you can read and remove them. When the plugin updates, the next sync takes the
+new build from Claude Code's plugin cache, so you activate once per machine.
+`/inlinr:deactivate` (disconnect) takes the hooks out. A machine set up with an
+earlier release runs `/inlinr:activate` once after updating.
 
 **One connection per machine.** Since 0.7.0 the token is saved in
 `~/.inlinr/config.toml`, where the inlinr VS Code extension and the `inlinr`
@@ -249,7 +261,8 @@ uses the same `~/.inlinr` directory.
 
 ## What it does
 
-Seven hooks, all running the plugin's own `dist/index.js`. Two kinds:
+Seven hooks in `~/.claude/settings.json`, all running `~/.inlinr/agents.js`
+(the plugin's `dist/index.js`, copied). Two kinds:
 
 | Hook | Why |
 |---|---|

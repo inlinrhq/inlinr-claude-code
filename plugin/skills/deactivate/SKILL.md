@@ -20,6 +20,14 @@ and show the user its full output:
 node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" deactivate --pause
 ```
 
+Disconnecting also takes inlinr's hooks out of `~/.claude/settings.json`.
+After a pause they stay, and send nothing until `/inlinr:activate`. If the
+user only wants the hooks gone, run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" setup claude-code --remove
+```
+
 Their history is untouched either way: this stops tracking, it does not
 delete anything. `/inlinr:activate` resumes after a pause, or connects the
 machine again.

@@ -8,6 +8,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync as mkdirSync2,
+  readdirSync as readdirSync2,
   readFileSync as readFileSync3,
   writeFileSync as writeFileSync2
 } from "node:fs";
@@ -430,6 +431,147 @@ ${JSON.stringify(hooks, null, 2)}`
 `, "utf8");
   return { ok: true, message: `Added the hooks to ${path}.` };
 }
+var CLAUDE_MARK = "--from claude-code";
+var CLAUDE_EVENTS = {
+  SessionStart: false,
+  UserPromptSubmit: true,
+  PostToolUse: true,
+  SubagentStop: true,
+  PreCompact: false,
+  Stop: false,
+  SessionEnd: false
+};
+function claudeCodeHooks(node, script) {
+  const base = `"${node}" "${script}" ${CLAUDE_MARK}`;
+  return Object.fromEntries(Object.entries(CLAUDE_EVENTS).map(([event, throttled]) => [
+    event,
+    {
+      hooks: [
+        {
+          type: "command",
+          command: throttled ? `${base} --throttle 120` : base,
+          timeout: 20,
+          async: true
+        }
+      ]
+    }
+  ]));
+}
+var ours = (h) => h.command?.includes(CLAUDE_MARK) ?? false;
+function withoutOurs(hooks) {
+  let found = false;
+  const out = {};
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) {
+      out[event] = groups;
+      continue;
+    }
+    const kept = [];
+    for (const g of groups) {
+      const list = Array.isArray(g.hooks) ? g.hooks : [];
+      const rest = list.filter((h) => !ours(h));
+      if (rest.length !== list.length)
+        found = true;
+      if (rest.length > 0 || list.length === 0)
+        kept.push({ ...g, hooks: rest });
+    }
+    if (kept.length > 0)
+      out[event] = kept;
+  }
+  return found ? out : null;
+}
+function readSettings(path) {
+  try {
+    const value = JSON.parse(readFileSync3(path, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? { ok: true, value } : { ok: false };
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return { ok: true, value: {} };
+    return { ok: false };
+  }
+}
+function hooksOf(settings) {
+  return settings.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
+}
+function setupClaudeCode(node, script, home) {
+  const path = join3(home, "settings.json");
+  const wanted = claudeCodeHooks(node, script);
+  const settings = readSettings(path);
+  if (!settings.ok) {
+    const block = Object.fromEntries(Object.entries(wanted).map(([e, g]) => [e, [g]]));
+    return {
+      ok: false,
+      message: `Could not read ${path}. Add this under "hooks" yourself:
+
+${JSON.stringify(block, null, 2)}`
+    };
+  }
+  const current = hooksOf(settings.value);
+  const hooks = withoutOurs(current) ?? current;
+  for (const [event, group] of Object.entries(wanted)) {
+    hooks[event] = [
+      ...Array.isArray(hooks[event]) ? hooks[event] : [],
+      group
+    ];
+  }
+  settings.value.hooks = hooks;
+  mkdirSync2(home, { recursive: true });
+  writeFileSync2(path, `${JSON.stringify(settings.value, null, 2)}
+`, "utf8");
+  return { ok: true, message: `Added inlinr's hooks to ${path}.` };
+}
+function removeClaudeCode(home) {
+  const path = join3(home, "settings.json");
+  const settings = readSettings(path);
+  if (!settings.ok)
+    return null;
+  const hooks = withoutOurs(hooksOf(settings.value));
+  if (!hooks)
+    return null;
+  if (Object.keys(hooks).length > 0)
+    settings.value.hooks = hooks;
+  else
+    delete settings.value.hooks;
+  writeFileSync2(path, `${JSON.stringify(settings.value, null, 2)}
+`, "utf8");
+  return { ok: true, message: `Removed inlinr's hooks from ${path}.` };
+}
+function hasClaudeCodeHooks(home) {
+  const settings = readSettings(join3(home, "settings.json"));
+  return settings.ok && withoutOurs(hooksOf(settings.value)) !== null;
+}
+function newestPluginBundle(home) {
+  const cache = join3(home, "plugins", "cache");
+  let best = null;
+  for (const market of safeList(cache)) {
+    const plugin = join3(cache, market, "inlinr");
+    for (const version of safeList(plugin)) {
+      if (!/^\d+\.\d+\.\d+$/.test(version))
+        continue;
+      const path = join3(plugin, version, "dist", "index.js");
+      if (!existsSync(path))
+        continue;
+      if (!best || older(best.version, version))
+        best = { path, version };
+    }
+  }
+  return best;
+}
+function safeList(dir) {
+  try {
+    return readdirSync2(dir);
+  } catch {
+    return [];
+  }
+}
+function refreshFromPlugin(self, version, home) {
+  if (self !== standalonePath())
+    return;
+  const newest = newestPluginBundle(home);
+  if (!newest || !older(version, newest.version))
+    return;
+  copyFileSync(newest.path, self);
+}
 
 // src/commands/activate.ts
 import { execFileSync } from "node:child_process";
@@ -440,7 +582,7 @@ import { dirname } from "node:path";
 
 // src/commands/cloud.ts
 import { createHash as createHash2 } from "node:crypto";
-import { readdirSync as readdirSync2, readFileSync as readFileSync4 } from "node:fs";
+import { readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join4 } from "node:path";
 function cloudSettingsUrl(apiUrl) {
@@ -498,7 +640,7 @@ function companionInstalled(claudeDir) {
 var COMPANION = "inlinr-cloud";
 function list2(dir) {
   try {
-    return readdirSync2(dir);
+    return readdirSync3(dir);
   } catch {
     return [];
   }
@@ -812,6 +954,9 @@ async function deactivate(config, mode) {
     files: {}
   }, "set");
   console.log(revoked ? "  Disconnected. The device has been revoked on inlinr.com too." : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.");
+  const removed = removeClaudeCode(claudeDir());
+  if (removed)
+    console.log(`  ${removed.message}`);
   if (machineToken()) {
     console.log("  This machine is still connected through the inlinr extension or CLI with another token. Run /inlinr:deactivate --machine again to disconnect it too, or --pause to stop only Claude Code.");
   } else if (source.from === "machine") {
@@ -913,7 +1058,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.8.3";
+var VERSION = "0.9.0";
 
 // src/failure.ts
 var logPath = () => join6(configDir(), "claude-code.log");
@@ -1039,17 +1184,33 @@ async function sessionCheck(config) {
 // src/commands/setup.ts
 import { resolve } from "node:path";
 var self = () => resolve(process.argv[1] ?? "");
-function setup(tool) {
-  if (tool !== "codex" && tool !== "gemini-cli") {
-    console.error("  Usage: setup codex | setup gemini-cli");
+var NAMES = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  "gemini-cli": "Gemini CLI"
+};
+function setup(tool, remove = false) {
+  if (tool !== "claude-code" && tool !== "codex" && tool !== "gemini-cli") {
+    console.error("  Usage: setup claude-code | setup codex | setup gemini-cli");
     return 2;
   }
+  if (remove) {
+    if (tool !== "claude-code") {
+      console.error("  --remove is for setup claude-code only.");
+      return 2;
+    }
+    const removed = removeClaudeCode(claudeDir());
+    console.log("");
+    console.log(`  ${removed?.message ?? "No inlinr hook in Claude Code's settings."}`);
+    console.log("");
+    return 0;
+  }
   const script = installStandalone(self());
-  const result = tool === "codex" ? setupCodex(process.execPath, script) : setupGemini(process.execPath, script);
+  const result = tool === "claude-code" ? setupClaudeCode(process.execPath, script, claudeDir()) : tool === "codex" ? setupCodex(process.execPath, script) : setupGemini(process.execPath, script);
   console.log("");
   console.log(`  ${result.message}`);
   if (result.ok) {
-    console.log(`  ${tool === "codex" ? "Codex" : "Gemini CLI"} now sends its sessions to inlinr after each turn.`);
+    console.log(tool === "claude-code" ? "  Every Claude Code session on this machine now sends its time to inlinr, from the next one on." : `  ${NAMES[tool]} now sends its sessions to inlinr after each turn.`);
   }
   console.log("");
   return result.ok ? 0 : 1;
@@ -1063,7 +1224,7 @@ import { hostname as hostname2 } from "node:os";
 import {
   closeSync as closeSync2,
   openSync as openSync2,
-  readdirSync as readdirSync3,
+  readdirSync as readdirSync4,
   readSync,
   statSync as statSync3
 } from "node:fs";
@@ -1079,7 +1240,7 @@ function transcripts() {
   const walk = (dir, subagent) => {
     let entries;
     try {
-      entries = readdirSync3(dir, { withFileTypes: true, encoding: "utf8" });
+      entries = readdirSync4(dir, { withFileTypes: true, encoding: "utf8" });
     } catch {
       return;
     }
@@ -1154,6 +1315,7 @@ async function status(config) {
   if (source?.from === "plugin" && machineToken() && machineToken() !== source.token) {
     console.log("              the inlinr extension and CLI here use another connection (two devices, maybe two accounts)");
   }
+  console.log(`  Hooks       ${hasClaudeCodeHooks(claudeDir()) ? "in Claude Code's settings, every local session is tracked" : "none — /inlinr:activate adds them to Claude Code's settings"}`);
   console.log(`  Server      ${config.apiUrl}`);
   console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
   console.log(`  Transcripts ${all.length} found, ${pending} with something new`);
@@ -1816,7 +1978,7 @@ async function main() {
     });
   }
   if (args[0] === "setup")
-    return setup(args[1]);
+    return setup(args[1], args.includes("--remove"));
   if (args[0] === "deactivate") {
     const mode = args.includes("--machine") ? "machine" : args.includes("--pause") ? "pause" : null;
     return deactivate(config, mode);
@@ -1839,11 +2001,12 @@ async function main() {
       console.log("{}");
     return 0;
   }
-  if (process.env.CLAUDE_PLUGIN_ROOT) {
-    try {
+  try {
+    if (process.env.CLAUDE_PLUGIN_ROOT)
       refreshStandalone(self(), VERSION);
-    } catch {}
-  }
+    else
+      refreshFromPlugin(self(), VERSION, claudeDir());
+  } catch {}
   const i = args.indexOf("--throttle");
   const throttle = i >= 0 ? Number(args[i + 1] ?? 0) : 0;
   const release = acquireSyncLock();
