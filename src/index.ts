@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { refreshStandalone } from "./agents/setup";
+import { refreshFromPlugin, refreshStandalone } from "./agents/setup";
 import { activate } from "./commands/activate";
+import { claudeDir } from "./commands/cloud";
 import { deactivate } from "./commands/deactivate";
 import { sessionCheck } from "./commands/session-check";
 import { self, setup } from "./commands/setup";
@@ -48,7 +49,7 @@ async function main(): Promise<number> {
       editor,
     });
   }
-  if (args[0] === "setup") return setup(args[1]);
+  if (args[0] === "setup") return setup(args[1], args.includes("--remove"));
   if (args[0] === "deactivate") {
     const mode = args.includes("--machine")
       ? "machine"
@@ -77,14 +78,14 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  // Run by Claude Code: keep a standalone copy set up for another assistant
-  // on this build.
-  if (process.env.CLAUDE_PLUGIN_ROOT) {
-    try {
-      refreshStandalone(self(), VERSION);
-    } catch {
-      // The copy stays as it was; its own sync still runs.
-    }
+  // The standalone copy in ~/.inlinr follows the plugin: run from the
+  // plugin, it refreshes the copy; run as the copy (the hooks in Claude
+  // Code's settings), it takes a newer build from Claude Code's plugin cache.
+  try {
+    if (process.env.CLAUDE_PLUGIN_ROOT) refreshStandalone(self(), VERSION);
+    else refreshFromPlugin(self(), VERSION, claudeDir());
+  } catch {
+    // The copy stays as it was; its own sync still runs.
   }
 
   const i = args.indexOf("--throttle");

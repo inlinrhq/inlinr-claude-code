@@ -1,3 +1,4 @@
+import { removeClaudeCode } from "../agents/setup";
 import { revokeDevice } from "../api";
 import {
   type Config,
@@ -6,6 +7,7 @@ import {
   save,
   saveMachineToken,
 } from "../config";
+import { claudeDir } from "./cloud";
 
 export type DeactivateMode = "pause" | "machine" | null;
 
@@ -83,6 +85,9 @@ export async function deactivate(
       ? "  Disconnected. The device has been revoked on inlinr.com too."
       : "  Disconnected locally. inlinr.com could not be reached, so remove the device from Settings when you can.",
   );
+  // Nothing left to send: the hooks in Claude Code's settings go too.
+  const removed = removeClaudeCode(claudeDir());
+  if (removed) console.log(`  ${removed.message}`);
   if (machineToken()) {
     // This plugin's own token (an older release) is gone, but the machine
     // has another one, the CLI's: sessions would be tracked with it.

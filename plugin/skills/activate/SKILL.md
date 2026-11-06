@@ -21,5 +21,27 @@ no link. Only when the user explicitly wants this machine on **another inlinr
 account**, add `--replace` to the command: every inlinr plugin on the machine
 then moves to the account that approves.
 
-Do not modify the command otherwise, do not guess a different path, and do not offer to
+## Then the hooks
+
+The plugin itself runs nothing on its own. Once the command has finished
+and the machine is connected, tell the user, in these words or close:
+
+> To track your time, inlinr needs Claude Code to run it after each prompt,
+> tool call and reply. This adds hooks to your `~/.claude/settings.json`
+> that run `~/.inlinr/agents.js` in the background, for every Claude Code
+> session on this machine. They send file paths, line counts, token counts,
+> model and session id to inlinr.com, never a prompt, a reply or a file's
+> content. `/inlinr:deactivate` takes them out.
+
+Ask whether to add them, and only on a yes run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/index.js" setup claude-code
+```
+
+Show its output. Tracking starts with the next session. If they say no,
+tell them nothing is tracked until they run `/inlinr:activate` again and
+accept.
+
+Do not modify the commands otherwise, do not guess a different path, and do not offer to
 install anything else — there is nothing else to install.

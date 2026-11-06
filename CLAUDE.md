@@ -27,7 +27,6 @@ Sibling repos:
 .claude-plugin/marketplace.json  # marketplace: inlinr (./plugin) and inlinr-cloud (./cloud)
 plugin/           # what is published: the plugin tree, nothing else (see below)
 plugin/.claude-plugin/plugin.json # plugin manifest (version, directory listing fields)
-plugin/hooks/hooks.json           # when Claude Code runs us (see below)
 plugin/skills/{activate,status,deactivate,cloud,upgrade}/SKILL.md   # the /inlinr:* commands
 plugin/dist/index.js              # the committed bundle Claude Code actually runs
 src/index.ts      # entry: dispatches to a command, never breaks the turn on failure
@@ -52,11 +51,19 @@ cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim
 
 ## How it runs
 
-- `plugin/hooks/hooks.json` runs `plugin/dist/index.js` on SessionStart (a 5 s
-  `session-check`, then a sync), UserPromptSubmit, PostToolUse and
-  SubagentStop (throttled to 120 s), PreCompact, Stop and SessionEnd. Every
-  sync hook is `async`: a tracker must never slow or break the turn it
-  measures, so every path exits 0 except interactive `activate`.
+- The plugin declares **no hook**: Anthropic's directory accepts command hooks
+  only from Verified organizations (`LOCAL_CODE_HOOK_COMMAND`, 6/11). After
+  the user agrees, `/inlinr:activate` runs `setup claude-code`
+  (`src/agents/setup.ts`): the bundle is copied to `~/.inlinr/agents.js` and
+  seven hooks marked `--from claude-code` go into `~/.claude/settings.json`:
+  SessionStart, PreCompact, Stop and SessionEnd sync; UserPromptSubmit,
+  PostToolUse and SubagentStop sync throttled to 120 s. Every one is
+  `async`: a tracker must never slow or break the turn it measures, so every
+  path exits 0 except interactive `activate`. Run as that copy, a sync takes
+  a newer build from `<claude home>/plugins/cache/*/inlinr/<version>/`
+  (`refreshFromPlugin`). `deactivate --machine` and `setup claude-code
+  --remove` take the hooks out. Never add a `type: "command"` hook back to
+  `plugin/`.
 - Each transcript keeps its own read offset in `claude-code.json`;
   `lastParsedAt` is set once at activation and never moved, so nothing from
   before activation is sent.
@@ -85,8 +92,11 @@ cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim
 - Cloud sessions get the plugin when it is installed from Anthropic's
   plugin directory or uploaded to the claude.ai account (both are copied
   into `~/.claude/plugins/synced/` as a container starts: seen on 4/11 for
-  an uploaded `inlinr-cloud`, whose hook ran there), or through inlinr.com's
-  setup line, which runs the bundle pinned in inlinr-web.
+  an uploaded `inlinr-cloud`, whose hook ran there). Since 0.9.0 it runs
+  nothing there, having no hook: a cloud session is tracked by
+  `inlinr-cloud` and the connector, or by inlinr.com's setup line, which
+  installs its own hooks (`session-check` included) around the bundle
+  pinned in inlinr-web.
   Repository hooks of older releases download `dist/index.js` from `main`:
   **so `main`'s `dist/` is live for them the moment it merges.**
 - `plugin/` is the only folder the marketplace and the directory read. Dev
@@ -148,8 +158,9 @@ bun run build
 ## Conventions
 
 - Biome, 2 spaces, double quotes; TypeScript strict; `bun test`.
-- A sync prints nothing. `session-check` prints only the notice (Claude Code
-  adds a SessionStart hook's stdout to the session), and only when the
+- A sync prints nothing. `session-check` (the SessionStart hook of
+  inlinr.com's setup line) prints only the notice (Claude Code adds a
+  SessionStart hook's stdout to the session), and only when the
   machine is not connected; the interactive commands (`activate`, `status`,
   `deactivate`, `--version`) print for the person running them.
 - Nothing from a transcript but paths, line counts, token counts, model and

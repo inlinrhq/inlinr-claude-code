@@ -4,7 +4,11 @@ Tracks the time you spend with Claude Code, Codex and Gemini CLI, the tokens
 used and the lines the assistant wrote, on [inlinr.com](https://inlinr.com).
 
 - Install: `/plugin install inlinr --marketplace inlinrhq/inlinr-claude-code`
-- Connect once with `/inlinr:activate`. Nothing is sent before that.
+- Connect once with `/inlinr:activate`. Nothing is sent before that. The
+  plugin declares no hook: after you agree, `/inlinr:activate` adds hooks to
+  your `~/.claude/settings.json` that run the sync in the background for
+  every Claude Code session on the machine. `/inlinr:deactivate` removes
+  them.
 - What leaves the machine: file paths, project and branch names, line
   counts, token counts, model and session id. Never a prompt, a response or
   a file's content.
