@@ -46,7 +46,9 @@ src/notice.ts     # what SessionStart tells Claude when the machine is not conne
 src/report.ts     # own failures → POST /api/v1/plugin-errors
 dist/index.js     # the same bundle, copied by the build: inlinr.com pins it by commit,
                   # and repository hooks of releases before 0.8.1 fetch it from main
-cloud/            # inlinr-cloud: the companion plugin, one mcp_tool hook (claim_session)
+cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_activity;
+                  # people upload inlinr.com/inlinr-cloud.zip, built from inlinr-web's copy
+                  # (src/lib/cloud/companion.ts): change both together
 ```
 
 ## How it runs
