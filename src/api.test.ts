@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { coalesceEdits, MAX_BATCH, type Repo, toHeartbeats } from "./api";
+import {
+  coalesceEdits,
+  hideNames,
+  MAX_BATCH,
+  type Repo,
+  repoPath,
+  toHeartbeats,
+} from "./api";
 import type { Session } from "./transcript";
 
 const edit = (
@@ -231,5 +238,76 @@ describe("MAX_BATCH", () => {
     // not a slow request — which is exactly how a whole sync failed
     // silently.
     expect(MAX_BATCH).toBe(1000);
+  });
+});
+
+describe("repoPath", () => {
+  test("sends a file's path from its repository, never the full path", () => {
+    const [b] = toHeartbeats(
+      session({ edits: [edit("/repo/src/a.ts", "2026-08-01T10:00:00Z")] }),
+      resolve,
+      "0.1.0",
+    );
+    expect(b?.entity).toBe("src/a.ts");
+  });
+
+  test("reads a Windows path against git's root", () => {
+    // Git writes the root with "/", the assistants with "\", in any case.
+    expect(repoPath("C:\\Work\\Api\\src\\a.ts", "C:/work/api")).toBe(
+      "src/a.ts",
+    );
+    expect(repoPath("\\\\nas\\share\\api\\b.ts", "//nas/share/api")).toBe(
+      "b.ts",
+    );
+  });
+
+  test("keeps case on other systems, and a root's trailing slash", () => {
+    expect(repoPath("/home/me/api/x/y.go", "/home/me/api/")).toBe("x/y.go");
+    expect(repoPath("/home/me/API/y.go", "/home/me/api")).toBe("y.go");
+  });
+
+  test("a file outside its root goes by its name alone", () => {
+    expect(repoPath("/var/folders/api/z.ts", "/private/var/elsewhere")).toBe(
+      "z.ts",
+    );
+  });
+});
+
+describe("hideNames", () => {
+  const beats = toHeartbeats(
+    session({
+      edits: [edit("/repo/client-acme/a.test.ts", "2026-08-01T10:00:00Z")],
+      activity: [act("2026-08-01T10:00:00Z")],
+    }),
+    resolve,
+    "0.1.0",
+  );
+
+  test("keeps the extension, drops the name and folders", () => {
+    const out = hideNames(beats, {
+      hideFileNames: true,
+      hideBranchNames: false,
+    });
+    const file = out.find((b) => b.type === "file");
+    expect(file?.entity).toBe("HIDDEN.ts");
+    expect(file?.branch).toBe("main");
+    expect(out.find((b) => b.type === "app")?.entity).toBe("claude-code");
+  });
+
+  test("drops the branch", () => {
+    const out = hideNames(beats, {
+      hideFileNames: false,
+      hideBranchNames: true,
+    });
+    expect(out.every((b) => b.branch === undefined)).toBe(true);
+    expect(out.find((b) => b.type === "file")?.entity).toBe(
+      "client-acme/a.test.ts",
+    );
+  });
+
+  test("changes nothing when nothing is hidden", () => {
+    expect(
+      hideNames(beats, { hideFileNames: false, hideBranchNames: false }),
+    ).toBe(beats);
   });
 });

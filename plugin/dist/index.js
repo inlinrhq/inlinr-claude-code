@@ -125,6 +125,31 @@ function readMachineToken(text) {
   const value = TOKEN_LINE.exec(text.slice(table.start, table.end))?.[2] ?? "";
   return TOKEN_SHAPE.test(value) ? value : "";
 }
+function machineBehavior(now = Date.now()) {
+  let text = "";
+  try {
+    text = readFileSync(machinePath(), "utf8");
+  } catch {}
+  return readMachineBehavior(text, now);
+}
+function readMachineBehavior(text, now) {
+  const header = /^\s*\[behavior\]\s*(#.*)?$/m.exec(text);
+  let table = "";
+  if (header) {
+    const start = header.index + header[0].length;
+    const next = /^\s*\[/m.exec(text.slice(start));
+    table = text.slice(start, next ? start + next.index : text.length);
+  }
+  const flag = (key) => new RegExp(`^\\s*${key}\\s*=\\s*true\\b`, "m").test(table);
+  const until = /^\s*paused_until\s*=\s*["']?([0-9T:.+\-Z ]+?)["']?\s*(#.*)?$/m.exec(table)?.[1];
+  const end = until ? Date.parse(until) : Number.NaN;
+  const pausedUntil = Number.isFinite(end) && end > now ? end : flag("paused") ? Number.POSITIVE_INFINITY : null;
+  return {
+    pausedUntil,
+    hideFileNames: flag("hide_file_names"),
+    hideBranchNames: flag("hide_branch_names")
+  };
+}
 function withMachineToken(text, value) {
   if (value && !TOKEN_SHAPE.test(value)) {
     throw new Error("Refusing to save a token that is not an inlinr token.");
@@ -706,6 +731,15 @@ function coalesceEdits(edits) {
 function projectOf(repo) {
   return repo.remote ? { project_git_remote: repo.remote } : { project: repo.project };
 }
+function repoPath(file, root) {
+  const f = file.replace(/\\/g, "/");
+  const r = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const windows = /^[A-Za-z]:\//.test(r) || r.startsWith("//");
+  const under = windows ? f.toLowerCase().startsWith(`${r.toLowerCase()}/`) : f.startsWith(`${r}/`);
+  if (r && under)
+    return f.slice(r.length + 1);
+  return f.split("/").filter(Boolean).pop() ?? f;
+}
 var ACTIVITY_WINDOW_MS = 60 * 1000;
 function toHeartbeats(session, resolve, pluginVersion) {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
@@ -722,7 +756,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
   });
   const beats = edits.map(({ edit, repo }) => ({
     ...base,
-    entity: edit.path,
+    entity: repoPath(edit.path, repo.root),
     type: "file",
     time: Date.parse(edit.timestamp) / 1000,
     category: "coding",
@@ -781,6 +815,22 @@ function toHeartbeats(session, resolve, pluginVersion) {
     last.ai_cache_write_tokens = t.cacheWrite;
   }
   return beats.sort((a, b) => a.time - b.time);
+}
+function hideNames(beats, hide) {
+  if (!hide.hideFileNames && !hide.hideBranchNames)
+    return beats;
+  return beats.map((beat) => {
+    const out = { ...beat };
+    if (hide.hideFileNames && out.type === "file") {
+      const name = out.entity.split("/").pop() ?? "";
+      const dot = name.lastIndexOf(".");
+      const ext = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+      out.entity = `HIDDEN${ext}`;
+    }
+    if (hide.hideBranchNames)
+      delete out.branch;
+    return out;
+  });
 }
 var MAX_BATCH = 1000;
 async function sendHeartbeats(apiUrl, as, beats) {
@@ -1058,7 +1108,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.9.0";
+var VERSION = "0.10.0";
 
 // src/failure.ts
 var logPath = () => join6(configDir(), "claude-code.log");
@@ -1315,6 +1365,17 @@ async function status(config) {
   if (source?.from === "plugin" && machineToken() && machineToken() !== source.token) {
     console.log("              the inlinr extension and CLI here use another connection (two devices, maybe two accounts)");
   }
+  const behavior = machineBehavior();
+  if (behavior.pausedUntil) {
+    console.log(`  Tracking    paused on this machine ${Number.isFinite(behavior.pausedUntil) ? `until ${new Date(behavior.pausedUntil).toLocaleString()}` : "until `inlinr resume` (or Resume tracking in VS Code)"}; nothing is sent`);
+  }
+  if (behavior.hideFileNames || behavior.hideBranchNames) {
+    const hidden = [
+      behavior.hideFileNames ? "file names" : "",
+      behavior.hideBranchNames ? "branches" : ""
+    ].filter(Boolean);
+    console.log(`  Hidden      ${hidden.join(" and ")} (config.toml)`);
+  }
   console.log(`  Hooks       ${hasClaudeCodeHooks(claudeDir()) ? "in Claude Code's settings, every local session is tracked" : "none — /inlinr:activate adds them to Claude Code's settings"}`);
   console.log(`  Server      ${config.apiUrl}`);
   console.log(`  Last sync   ${config.lastSyncAt ? new Date(config.lastSyncAt).toLocaleString() : "never"}`);
@@ -1335,7 +1396,7 @@ async function status(config) {
 }
 
 // src/agents/codex.ts
-import { isAbsolute, resolve as resolve2 } from "node:path";
+import { posix, win32 } from "node:path";
 
 // src/transcript.ts
 var emptyTokens = () => ({
@@ -1474,9 +1535,11 @@ function codexTokens(usage) {
     output: n2(usage.output_tokens)
   };
 }
+var WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
 function parsePatch(patch, cwd) {
   const files = [];
-  const where = (p) => isAbsolute(p) || !cwd ? p : resolve2(cwd, p);
+  const style = WINDOWS_PATH.test(cwd) ? win32 : posix;
+  const where = (p) => style.isAbsolute(p) || !cwd ? p : style.resolve(cwd, p);
   let current = null;
   for (const raw of patch.split(`
 `)) {
@@ -1942,9 +2005,11 @@ async function sync(config, throttleSeconds) {
       continue;
     beats.push(...toHeartbeats(session, resolve, VERSION));
   }
-  if (beats.length > 0) {
+  const behavior = machineBehavior();
+  const sendable = behavior.pausedUntil ? [] : hideNames(beats, behavior);
+  if (sendable.length > 0) {
     try {
-      await sendHeartbeats(config.apiUrl, deviceToken ? { token: deviceToken } : { session: session ?? "" }, beats);
+      await sendHeartbeats(config.apiUrl, deviceToken ? { token: deviceToken } : { session: session ?? "" }, sendable);
     } catch (err) {
       if (session && err.status === 401)
         return 0;

@@ -237,6 +237,61 @@ export function readMachineToken(text: string): string {
 }
 
 /**
+ * The machine's own settings, under `[behavior]` in config.toml, shared with
+ * the CLI (and so with the VS Code extension): a pause (`inlinr pause`, the
+ * extension's Pause tracking) and the names the person chose not to send.
+ */
+export type MachineBehavior = {
+  /** Until when tracking is paused: null when it is not, Infinity with no end. */
+  pausedUntil: number | null;
+  hideFileNames: boolean;
+  hideBranchNames: boolean;
+};
+
+export function machineBehavior(now = Date.now()): MachineBehavior {
+  let text = "";
+  try {
+    text = readFileSync(machinePath(), "utf8");
+  } catch {
+    // No file: nothing paused, nothing hidden.
+  }
+  return readMachineBehavior(text, now);
+}
+
+export function readMachineBehavior(
+  text: string,
+  now: number,
+): MachineBehavior {
+  const header = /^\s*\[behavior\]\s*(#.*)?$/m.exec(text);
+  let table = "";
+  if (header) {
+    const start = header.index + header[0].length;
+    const next = /^\s*\[/m.exec(text.slice(start));
+    table = text.slice(start, next ? start + next.index : text.length);
+  }
+  const flag = (key: string) =>
+    new RegExp(`^\\s*${key}\\s*=\\s*true\\b`, "m").test(table);
+  // The CLI writes a TOML date (`paused_until = 2026-11-19T18:00:00Z`);
+  // a quoted one is read too.
+  const until =
+    /^\s*paused_until\s*=\s*["']?([0-9T:.+\-Z ]+?)["']?\s*(#.*)?$/m.exec(
+      table,
+    )?.[1];
+  const end = until ? Date.parse(until) : Number.NaN;
+  const pausedUntil =
+    Number.isFinite(end) && end > now
+      ? end
+      : flag("paused")
+        ? Number.POSITIVE_INFINITY
+        : null;
+  return {
+    pausedUntil,
+    hideFileNames: flag("hide_file_names"),
+    hideBranchNames: flag("hide_branch_names"),
+  };
+}
+
+/**
  * config.toml with `device_token` set to `value` ("" to clear it), the rest
  * left as it was. The CLI writes this file with a TOML encoder; editing one
  * line keeps its other settings without a TOML library in the bundle.

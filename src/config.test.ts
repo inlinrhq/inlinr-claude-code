@@ -14,6 +14,7 @@ import {
   acquireSyncLock,
   load,
   machineToken,
+  readMachineBehavior,
   readMachineToken,
   replaceFile,
   SYNC_LOCK_STALE_MS,
@@ -171,5 +172,48 @@ describe("replaceFile", () => {
       }),
     ).toThrow("nope");
     expect(existsSync(tmp)).toBe(false);
+  });
+});
+
+describe("readMachineBehavior", () => {
+  const now = Date.parse("2026-11-19T10:00:00Z");
+
+  test("nothing paused or hidden without the keys", () => {
+    expect(readMachineBehavior('[auth]\ndevice_token = "x"\n', now)).toEqual({
+      pausedUntil: null,
+      hideFileNames: false,
+      hideBranchNames: false,
+    });
+  });
+
+  test("reads the CLI's pause, with or without an end", () => {
+    const open = "[behavior]\npaused = true\n";
+    expect(readMachineBehavior(open, now).pausedUntil).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+    const timed =
+      "[behavior]\npaused = false\npaused_until = 2026-11-19T11:00:00Z\n";
+    expect(readMachineBehavior(timed, now).pausedUntil).toBe(
+      Date.parse("2026-11-19T11:00:00Z"),
+    );
+    // Over: no pause.
+    expect(
+      readMachineBehavior(timed, Date.parse("2026-11-19T12:00:00Z"))
+        .pausedUntil,
+    ).toBeNull();
+  });
+
+  test("reads the hidden names, only under [behavior]", () => {
+    const text = [
+      "[behavior]",
+      "hide_file_names = true",
+      "hide_branch_names = false",
+      "[logging]",
+      "hide_branch_names = true",
+    ].join("\n");
+    expect(readMachineBehavior(text, now)).toMatchObject({
+      hideFileNames: true,
+      hideBranchNames: false,
+    });
   });
 });

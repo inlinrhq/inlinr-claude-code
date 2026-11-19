@@ -106,6 +106,13 @@ cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_
   a `package.json` with a lockfile in a plugin's folder makes Claude Code
   run an install there on every user's machine, and the directory holds it
   for review.
+- `[behavior]` in config.toml is the machine's, shared with the CLI and the
+  extension (`machineBehavior`): `paused` / `paused_until` (`inlinr pause`,
+  Pause tracking in VS Code) drop the beats of every sync while they hold,
+  positions still saved, so nothing from a pause is sent later;
+  `hide_file_names` / `hide_branch_names` go through `hideNames`. A file's
+  entity is its path from the repository's root, `/` between folders
+  (`repoPath`), as the extension sends it: never the full path.
 - Codex and Gemini CLI files are read by the same sync, with their own
   state in `files` (`agent`). A Codex file is keyed by its name, not its
   path: archiving moves it. Without Claude Code, `setup` copies the bundle
