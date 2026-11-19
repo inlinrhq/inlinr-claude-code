@@ -6,9 +6,10 @@ import {
   parseCodex,
   parseGemini,
 } from "../agents";
-import { sendHeartbeats, toHeartbeats } from "../api";
+import { hideNames, sendHeartbeats, toHeartbeats } from "../api";
 import {
   type Config,
+  machineBehavior,
   machineToken,
   save,
   saveMachineToken,
@@ -141,14 +142,20 @@ export async function sync(
     beats.push(...toHeartbeats(session, resolve, VERSION));
   }
 
+  // Paused on this machine (`inlinr pause`, or Pause tracking in VS Code):
+  // the lines are read and their positions saved, the beats dropped. What
+  // happened during a pause is never sent, then or later.
+  const behavior = machineBehavior();
+  const sendable = behavior.pausedUntil ? [] : hideNames(beats, behavior);
+
   // Positions are saved only once the beats have landed. A failed send
   // throws past this point, and the next sync reads the same lines again.
-  if (beats.length > 0) {
+  if (sendable.length > 0) {
     try {
       await sendHeartbeats(
         config.apiUrl,
         deviceToken ? { token: deviceToken } : { session: session ?? "" },
-        beats,
+        sendable,
       );
     } catch (err) {
       // A session nobody claimed (no connector, or its hook has not run

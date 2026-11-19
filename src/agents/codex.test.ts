@@ -75,6 +75,22 @@ describe("parsePatch", () => {
       { path: "/r/b.ts", added: 1, removed: 0 },
     ]);
   });
+
+  test("joins a Windows folder the Windows way, on any machine", () => {
+    const patch = [
+      "*** Update File: src/a.ts",
+      "+x",
+      "*** Add File: src\\b.ts",
+      "+y",
+      "*** Add File: D:\\other\\c.ts",
+      "+z",
+    ].join("\n");
+    expect(parsePatch(patch, "C:\\work\\api").map((f) => f.path)).toEqual([
+      "C:\\work\\api\\src\\a.ts",
+      "C:\\work\\api\\src\\b.ts",
+      "D:\\other\\c.ts",
+    ]);
+  });
 });
 
 describe("codexTokens", () => {

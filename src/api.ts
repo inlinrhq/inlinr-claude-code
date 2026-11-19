@@ -173,6 +173,28 @@ function projectOf(
 export type ResolveRepo = (dir: string) => Repo | null;
 
 /**
+ * A file's path from its repository's root, with `/` between folders: what
+ * the VS Code extension sends, so a file edited by hand and by an assistant
+ * is one file on inlinr. Never the full path, which names the home folder
+ * (and so the person) on every beat.
+ *
+ * Git writes the root with `/` on Windows too (`C:/work/api`), where the
+ * assistants write `C:\work\api\src\a.ts`, and Windows ignores case. A
+ * file not under the root (a link git resolved differently) goes by its
+ * name alone.
+ */
+export function repoPath(file: string, root: string): string {
+  const f = file.replace(/\\/g, "/");
+  const r = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const windows = /^[A-Za-z]:\//.test(r) || r.startsWith("//");
+  const under = windows
+    ? f.toLowerCase().startsWith(`${r.toLowerCase()}/`)
+    : f.startsWith(`${r}/`);
+  if (r && under) return f.slice(r.length + 1);
+  return f.split("/").filter(Boolean).pop() ?? f;
+}
+
+/**
  * One activity beat per minute is plenty.
  *
  * Duration only needs the gaps to stay under the keystroke timeout (five
@@ -224,7 +246,7 @@ export function toHeartbeats(
 
   const beats: Heartbeat[] = edits.map(({ edit, repo }) => ({
     ...base,
-    entity: edit.path,
+    entity: repoPath(edit.path, repo.root),
     type: "file",
     time: Date.parse(edit.timestamp) / 1000,
     category: "coding",
@@ -289,6 +311,29 @@ export function toHeartbeats(
   }
 
   return beats.sort((a, b) => a.time - b.time);
+}
+
+/**
+ * The beats with what the person chose not to send taken out
+ * (`hide_file_names`, `hide_branch_names` in config.toml, the CLI's same
+ * switches): a file keeps its extension, so the language is still known.
+ */
+export function hideNames(
+  beats: Heartbeat[],
+  hide: { hideFileNames: boolean; hideBranchNames: boolean },
+): Heartbeat[] {
+  if (!hide.hideFileNames && !hide.hideBranchNames) return beats;
+  return beats.map((beat) => {
+    const out = { ...beat };
+    if (hide.hideFileNames && out.type === "file") {
+      const name = out.entity.split("/").pop() ?? "";
+      const dot = name.lastIndexOf(".");
+      const ext = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+      out.entity = `HIDDEN${ext}`;
+    }
+    if (hide.hideBranchNames) delete out.branch;
+    return out;
+  });
 }
 
 /** The server's own limit. Sending more is a 400, not a slow request. */

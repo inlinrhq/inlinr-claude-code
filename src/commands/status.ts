@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { hasClaudeCodeHooks } from "../agents/setup";
-import { type Config, machineToken, token, tokenSource } from "../config";
+import {
+  type Config,
+  machineBehavior,
+  machineToken,
+  token,
+  tokenSource,
+} from "../config";
 import { logPath } from "../failure";
 import { hasNew, sessionFiles } from "../sessions";
 import type { AiTool } from "../transcript";
@@ -44,6 +50,23 @@ export async function status(config: Config): Promise<number> {
     console.log(
       "              the inlinr extension and CLI here use another connection (two devices, maybe two accounts)",
     );
+  }
+  const behavior = machineBehavior();
+  if (behavior.pausedUntil) {
+    console.log(
+      `  Tracking    paused on this machine ${
+        Number.isFinite(behavior.pausedUntil)
+          ? `until ${new Date(behavior.pausedUntil).toLocaleString()}`
+          : "until `inlinr resume` (or Resume tracking in VS Code)"
+      }; nothing is sent`,
+    );
+  }
+  if (behavior.hideFileNames || behavior.hideBranchNames) {
+    const hidden = [
+      behavior.hideFileNames ? "file names" : "",
+      behavior.hideBranchNames ? "branches" : "",
+    ].filter(Boolean);
+    console.log(`  Hidden      ${hidden.join(" and ")} (config.toml)`);
   }
   console.log(
     `  Hooks       ${

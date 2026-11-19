@@ -246,6 +246,11 @@ Your history is untouched either way. `/inlinr:activate` resumes after a pause
 or connects the machine again; tracking starts from that moment, and what was
 done while paused or signed out is not sent.
 
+To pause every inlinr plugin on the machine at once (VS Code too), for an
+hour or until you resume, use `inlinr pause [--for 1h]` and `inlinr resume`, or
+Pause tracking in VS Code: this plugin reads the same switch and sends
+nothing while it is on, then or later. `/inlinr:status` shows it.
+
 **If the plugin seems stuck on an old version**, see [Updating](#updating).
 
 **No binary, no PATH, no antivirus argument.** Claude Code is a Node program,
@@ -322,7 +327,7 @@ writes on your machine — and from Codex's and Gemini CLI's session files:
 
 | Sent | Not sent |
 |---|---|
-| File paths that were edited | File contents |
+| Paths of the files edited, from the repository's root | File contents, and the folders above the repository |
 | Lines added / removed per edit | The code itself |
 | Input / output / cache token counts | Your prompts |
 | Model name, session id | Assistant responses |
@@ -332,6 +337,11 @@ writes on your machine — and from Codex's and Gemini CLI's session files:
 Work that cannot be tied to any git repository is skipped — there is no
 project to attribute it to. A repository with no remote (local only, or not
 pushed yet) is tracked under its folder's name; the path is never sent.
+
+`hide_file_names = true` under `[behavior]` in `~/.inlinr/config.toml` sends
+every file as `HIDDEN.<ext>` (the language is still known), and
+`hide_branch_names = true` sends no branch: the `inlinr` command and the VS
+Code extension follow the same two switches.
 
 When a sync fails on your machine (not a network error, not the server
 refusing it), the plugin tells inlinr, at most once a day for the same error:

@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { posix, win32 } from "node:path";
 import {
   type Activity,
   emptyTokens,
@@ -104,6 +104,9 @@ export function codexTokens(usage: CodexUsage | null | undefined): Tokens {
   };
 }
 
+/** A Windows path: a drive letter, or a UNC share. */
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
 export type PatchFile = { path: string; added: number; removed: number };
 
 /**
@@ -115,7 +118,12 @@ export type PatchFile = { path: string; added: number; removed: number };
  */
 export function parsePatch(patch: string, cwd: string): PatchFile[] {
   const files: PatchFile[] = [];
-  const where = (p: string) => (isAbsolute(p) || !cwd ? p : resolve(cwd, p));
+  // Paths are joined the way the machine Codex ran on writes them, read
+  // from its folder, not from the one this runs on: `C:\work` is a
+  // Windows folder wherever the file is read (and the tests run anywhere).
+  const style = WINDOWS_PATH.test(cwd) ? win32 : posix;
+  const where = (p: string) =>
+    style.isAbsolute(p) || !cwd ? p : style.resolve(cwd, p);
   let current: PatchFile | null = null;
   for (const raw of patch.split("\n")) {
     const line = raw.replace(/\r$/, "");
