@@ -4,6 +4,12 @@
 > workspace, absent d'un clone seul) : il tient l'état du chantier en cours. Mets-le à jour
 > après chaque modification.
 
+> **Socle commun** : les règles partagées par toutes les apps de Thibault
+> (attribution, identité git, PR, relecture, qualité, textes, perfs,
+> accessibilité, CI, VPS, Linear, remise en question des choix) sont dans le
+> dépôt `7IBO/socle` : lis son CLAUDE.md, puis le fichier du sujet. Ce fichier
+> ne garde que ce qui est propre à ce dépôt et gagne en cas d'écart.
+
 Claude Code plugin for inlinr. Reads Claude Code's own transcripts
 (`~/.claude/projects/**/*.jsonl`, subagents included), and the session files
 of Codex (`~/.codex/sessions/`) and Gemini CLI (`~/.gemini/tmp/*/chats/`) on
