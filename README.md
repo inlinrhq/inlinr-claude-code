@@ -10,6 +10,10 @@ token usage, and how many lines the assistant actually wrote. Since 0.6.0 it
 reads Codex and Gemini CLI sessions on the same machine too: see
 [Codex and Gemini CLI](#codex-and-gemini-cli).
 
+What the dashboard then shows, and a walk through setting it up:
+[Claude Code integration](https://inlinr.com/integrations/claude-code) and the
+guide [tracking Claude Code, Codex and Gemini CLI](https://inlinr.com/guides/track-claude-code).
+
 Works on macOS, Linux and Windows.
 
 ## Install
@@ -106,7 +110,9 @@ disk, like Claude Code: `~/.codex/sessions/` (or `$CODEX_HOME`) and
 `~/.gemini/tmp/<project>/chats/`. Every sync reads them as well, so **with the
 plugin installed and activated, there is nothing to do**: work in Codex or
 Gemini CLI shows up on inlinr under that assistant, with its model, tokens and
-the lines it wrote, the next time Claude Code syncs.
+the lines it wrote, the next time Claude Code syncs. Each has its page on
+inlinr.com: [Codex](https://inlinr.com/integrations/codex) and
+[Gemini CLI](https://inlinr.com/integrations/gemini-cli).
 
 Without Claude Code, run the same script from your assistant's own hook. It
 needs Node 18 or later:
@@ -287,7 +293,8 @@ and `/inlinr:status` points at it.
 ### How time is counted
 
 Time is the gaps between beats, as everywhere on inlinr: a gap under your
-keystroke timeout counts, a longer one means you walked away. So what matters
+keystroke timeout counts, a longer one means you walked away (the full rule:
+[how coding time is counted](https://inlinr.com/guides/how-coding-time-is-counted)). So what matters
 is that a beat exists for every stretch of real work:
 
 - **One activity beat per minute** in which the session did anything — a
