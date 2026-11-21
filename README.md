@@ -293,8 +293,8 @@ and `/inlinr:status` points at it.
 ### How time is counted
 
 Time is the gaps between beats, as everywhere on inlinr: a gap under your
-keystroke timeout counts, a longer one means you walked away (the full rule:
-[how coding time is counted](https://inlinr.com/guides/how-coding-time-is-counted)). So what matters
+keystroke timeout counts, a longer one means you walked away (the full
+rule: [how coding time is counted](https://inlinr.com/guides/how-coding-time-is-counted)). So what matters
 is that a beat exists for every stretch of real work:
 
 - **One activity beat per minute** in which the session did anything — a
