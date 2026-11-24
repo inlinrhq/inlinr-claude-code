@@ -4,11 +4,11 @@
 > workspace, absent d'un clone seul) : il tient l'état du chantier en cours. Mets-le à jour
 > après chaque modification.
 
-> **Socle commun** : les règles partagées par toutes les apps de Thibault
-> (attribution, identité git, PR, relecture, qualité, textes, perfs,
-> accessibilité, CI, VPS, Linear, remise en question des choix) sont dans le
-> dépôt `7IBO/socle` : lis son CLAUDE.md, puis le fichier du sujet. Ce fichier
-> ne garde que ce qui est propre à ce dépôt et gagne en cas d'écart.
+> **Règles communes** : attribution, identité git, PR, relecture, qualité,
+> textes, CI et sorties, appels à inlinr.com, clés, Linear, fils et remise en
+> question des choix sont dans [docs/regles.md](docs/regles.md). Ce dépôt se
+> suffit, à une exception près : le format des battements est tenu dans le
+> CLAUDE.md d'inlinr-cli (« Contract »). Ce fichier gagne en cas d'écart.
 
 Claude Code plugin for inlinr. Reads Claude Code's own transcripts
 (`~/.claude/projects/**/*.jsonl`, subagents included), and the session files
@@ -147,7 +147,7 @@ cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_
 bun install
 bun test
 bunx tsc --noEmit
-bunx biome ci .
+bunx @biomejs/biome@2.5.6 ci .
 bun run build
 ```
 
