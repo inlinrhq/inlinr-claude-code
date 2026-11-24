@@ -7,7 +7,8 @@
 > **Règles communes** : attribution, identité git, PR, relecture, qualité,
 > textes, CI et sorties, appels à inlinr.com, clés, Linear, fils et remise en
 > question des choix sont dans [docs/regles.md](docs/regles.md). Ce dépôt se
-> suffit : rien à lire ailleurs. Ce fichier gagne en cas d'écart.
+> suffit, à une exception près : le format des battements est tenu dans le
+> CLAUDE.md d'inlinr-cli (« Contract »). Ce fichier gagne en cas d'écart.
 
 Claude Code plugin for inlinr. Reads Claude Code's own transcripts
 (`~/.claude/projects/**/*.jsonl`, subagents included), and the session files
@@ -146,7 +147,7 @@ cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_
 bun install
 bun test
 bunx tsc --noEmit
-bunx biome ci .
+bunx @biomejs/biome@2.5.6 ci .
 bun run build
 ```
 

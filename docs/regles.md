@@ -22,8 +22,9 @@ PR, code, commentaires, README et textes du plugin en anglais.
    l'endroit où elle vit, jamais sa valeur.
 3. **Rien d'irréversible sans le mot de Thibault** : suppression en masse,
    message envoyé hors du projet, et ce qui touche à la production. Ici, la
-   production est `main` : ce qui y est mergé dans `plugin/` ou `dist/` tourne
-   chez les utilisateurs aussitôt, et son historique ne se réécrit pas.
+   production est `main` : ce qui y est mergé dans `plugin/`, `cloud/`,
+   `.claude-plugin/` ou `dist/` tourne chez les utilisateurs aussitôt, et son
+   historique ne se réécrit pas.
 4. **Chaque choix se remet en question** avant d'être codé (plus bas), puis
    Claude tranche seul et dit ce qu'il a décidé.
 5. **Pas d'avocat ni de comptable** : une question juridique ou fiscale se
@@ -40,7 +41,8 @@ PR, code, commentaires, README et textes du plugin en anglais.
 - `.githooks/commit-msg` refuse une ligne d'attribution dans un message ;
   l'étape « No attribution » de la CI relit les commits de la PR et refuse une
   branche `claude/`, mais ne voit pas le corps de la PR. Pas de hook
-  `pre-push` ici : `main` étant en production, tout passe par une PR.
+  `pre-push` ici : `main` étant en production, tout passe par une PR. Écart
+  au 24/11 : rien ne l'impose, `main` n'est pas protégée.
 - Une branche par ticket : le `gitBranchName` de Linear, sans le changer (on
   renomme le ticket avant), partie du dernier `origin/main`. Jamais de push
   forcé sur `main`, jamais de réécriture d'une branche partagée.
@@ -94,7 +96,7 @@ récit de l'auteur**. Quand un seul suffit, c'est le premier de la ligne.
 |---|---|
 | Lecture des transcriptions et des sessions, synchro, commandes, positions de lecture | code, deux fois : justesse et cas limites, puis charge (durée d'une synchro dans un hook, taille des fichiers lus, lots envoyés) |
 | Workflow, hooks écrits sur la machine (`setup`), jeton et `config.toml`, `plugin/` et ses manifestes, ce qui quitte la machine | code + ops |
-| Docs ou outillage seuls | code, deux fois : les faits et commandes, puis l'effet sur les autres règles |
+| Docs ou outillage seuls | code, une fois (étape 4 du cycle) : les faits et commandes, et l'effet sur les autres règles |
 
 - **Code** : justesse (vide, null, cas limites, deux synchros en même temps,
   une ligne coupée, un total de tokens compté deux fois) ; rien de lu ni
@@ -103,7 +105,7 @@ récit de l'auteur**. Quand un seul suffit, c'est le premier de la ligne.
   signalement ou un test) ; coût (durée d'une synchro) ; le contrat avec le
   serveur.
 - **Ops** : ce qu'un merge fait chez chaque utilisateur (la place de marché,
-  `dist/` de `main`), l'ordre avec inlinr-web, le retour arrière, les hooks
+  qui lit `.claude-plugin/`, `plugin/` et `cloud/` ; `dist/` de `main`), l'ordre avec inlinr-web, le retour arrière, les hooks
   écrits dans les réglages de la machine, ce que `plugin/` contient.
 
 Les remarques vont dans la section Reviews du corps (rôle, commit lu, la plus
@@ -183,7 +185,8 @@ vérifient en relecture.
 - Une sortie : changer `src/`, lancer `bun run build`, monter la version aux
   quatre endroits que `scripts/check-version.mjs` compare, décrire la sortie
   dans la PR. Une PR qui ne veut rien sortir ne touche ni à `src/`, ni à
-  `plugin/`, ni à `dist/`, ni à la version.
+  `plugin/`, ni à `cloud/`, ni à `.claude-plugin/`, ni à `dist/`, ni à la
+  version.
 - Une sortie ne se rappelle pas. Le retour arrière est une version de plus (un
   revert mergé, le bundle reconstruit, un numéro au-dessus). Jamais un merge
   pour « voir » un changement ; deux sorties par jour au plus, la seconde pour
@@ -203,7 +206,9 @@ d'appareil, envoi des beats, révocation, total du jour, signalement d'erreurs.
   une synchro est borné, à 20 s.
 - **On ne relance que ce qui peut passer**, jamais dans la même synchro : un
   envoi qui échoue ne sauve pas les positions de lecture, et la synchro
-  suivante relit les mêmes lignes.
+  suivante relit les mêmes lignes. Écart au 24/11 : un refus du serveur
+  (4xx, 400 compris) est rejoué à chaque synchro, alors qu'il ne passera
+  jamais.
 - **Le serveur n'est pas chargé plus que prévu** : une synchro toutes les
   120 s au plus sur les hooks fréquents, 1 000 beats au plus par requête.
 - **Un échec ne casse jamais le tour qu'il mesure** : chaque hook est `async`,
