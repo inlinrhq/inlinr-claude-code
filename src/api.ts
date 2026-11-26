@@ -160,6 +160,8 @@ export type Repo = {
   project?: string;
   root: string;
   branch: string;
+  /** No remote, in a temporary folder (`isTemporaryRoot`): an agent's. */
+  temporary?: boolean;
 };
 
 /** Where a beat's project comes from: the remote, else the folder's name. */
@@ -238,9 +240,32 @@ export function toHeartbeats(
     ...(session.model ? { ai_model: session.model } : {}),
   };
 
+  // A temporary repository (an agent's `git init` in /tmp, a scratchpad)
+  // is work for the project the session is about: its time goes there. The
+  // session's starting folder first, else the first real repository it
+  // stood in or edited; with none, the temporary one goes as `scratch`.
+  const real = (r: Repo | null) => (r && !r.temporary ? r : null);
+  let home: Repo | null | undefined;
+  const homeRepo = (): Repo | null => {
+    if (home !== undefined) return home;
+    home =
+      real(session.cwd ? resolve(session.cwd) : null) ??
+      session.activity
+        .map((a) => real(a.cwd ? resolve(a.cwd) : null))
+        .find((r) => r != null) ??
+      session.edits
+        .map((e) => real(resolve(dirname(e.path))))
+        .find((r) => r != null) ??
+      null;
+    return home;
+  };
+  const attach = (r: Repo | null): Repo | null =>
+    r?.temporary ? (homeRepo() ?? r) : r;
+
   const edits = coalesceEdits(session.edits).flatMap((edit) => {
-    const repo =
-      resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    const repo = attach(
+      resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null),
+    );
     return repo ? [{ edit, repo }] : [];
   });
 
@@ -280,7 +305,7 @@ export function toHeartbeats(
   for (const a of session.activity) {
     const at = Date.parse(a.at);
     if (Number.isNaN(at)) continue;
-    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    const repo = attach(a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
     if (!repo) continue;
     const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
     const found = windows.get(key);

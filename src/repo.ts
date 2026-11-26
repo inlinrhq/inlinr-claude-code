@@ -42,18 +42,26 @@ export function repoResolver(): ResolveRepo {
     // its folder's name. A folder outside any repository stays skipped: it
     // is often the parent of several, whose activity belongs to them. So
     // One with no remote in a temporary folder (an agent's `git init` in
-    // /tmp, a scratchpad, a worktree) would be a project of its own: its
-    // time goes to one project, `scratch`, which inlinr marks temporary.
+    // /tmp, a scratchpad, a worktree) would be a project of its own: it is
+    // marked, so `toHeartbeats` gives its time to the session's project,
+    // and with none to one project, `scratch`, which inlinr marks temporary.
+    const temporary = !remote && isTemporaryRoot(root);
     const project = remote
       ? undefined
-      : isTemporaryRoot(root)
+      : temporary
         ? SCRATCH_PROJECT
         : basename(root);
     if (!remote && !project) return null;
     // Checked out now, not when the line was written — the transcript's
     // own `gitBranch` is the starting folder's, wrong for any other repo.
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    return { remote, project, root, branch: branch === "HEAD" ? "" : branch };
+    return {
+      remote,
+      project,
+      root,
+      branch: branch === "HEAD" ? "" : branch,
+      ...(temporary ? { temporary } : {}),
+    };
   };
   return (dir: string) => {
     let d = dir;

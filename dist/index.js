@@ -750,8 +750,17 @@ function toHeartbeats(session, resolve, pluginVersion) {
     ai_session: session.id,
     ...session.model ? { ai_model: session.model } : {}
   };
+  const real = (r) => r && !r.temporary ? r : null;
+  let home;
+  const homeRepo = () => {
+    if (home !== undefined)
+      return home;
+    home = real(session.cwd ? resolve(session.cwd) : null) ?? session.activity.map((a) => real(a.cwd ? resolve(a.cwd) : null)).find((r) => r != null) ?? session.edits.map((e) => real(resolve(dirname(e.path)))).find((r) => r != null) ?? null;
+    return home;
+  };
+  const attach = (r) => r?.temporary ? homeRepo() ?? r : r;
   const edits = coalesceEdits(session.edits).flatMap((edit) => {
-    const repo = resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    const repo = attach(resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null));
     return repo ? [{ edit, repo }] : [];
   });
   const beats = edits.map(({ edit, repo }) => ({
@@ -786,7 +795,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
     const at = Date.parse(a.at);
     if (Number.isNaN(at))
       continue;
-    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    const repo = attach(a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
     if (!repo)
       continue;
     const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
@@ -1913,11 +1922,18 @@ function repoResolver() {
     if (!root)
       return null;
     const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
-    const project = remote ? undefined : isTemporaryRoot(root) ? SCRATCH_PROJECT : basename2(root);
+    const temporary = !remote && isTemporaryRoot(root);
+    const project = remote ? undefined : temporary ? SCRATCH_PROJECT : basename2(root);
     if (!remote && !project)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    return { remote, project, root, branch: branch === "HEAD" ? "" : branch };
+    return {
+      remote,
+      project,
+      root,
+      branch: branch === "HEAD" ? "" : branch,
+      ...temporary ? { temporary } : {}
+    };
   };
   return (dir) => {
     let d = dir;

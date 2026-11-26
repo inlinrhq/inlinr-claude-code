@@ -127,9 +127,11 @@ cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_
   waits for its hooks) and the plugin refreshes that copy when it is newer.
 - A repository with no remote whose root is in a temporary folder
   (`isTemporaryRoot`, `src/temporary.ts`: the system's temp folder, a
-  scratchpad, `.claude/worktrees/`, `.cache`) is sent as the project
-  `scratch` (`SCRATCH_PROJECT`), never its folder's name; the extension's
-  `folder-project.ts` has the same rule.
+  scratchpad, `.claude/worktrees/`, `.cache`) is `temporary`: its time goes
+  to the session's project (its starting folder's repository, else the
+  first real one it stood in or edited, `toHeartbeats`), else to the
+  project `scratch` (`SCRATCH_PROJECT`), never its folder's name. The
+  extension's `folder-project.ts` sends `scratch` (it has no session).
 - Work outside any git repository is skipped (no project to put it in; it
   is often the parent folder of several). A repository with no remote is
   sent as `project`, its folder's name (needs inlinr-web with `project`).
