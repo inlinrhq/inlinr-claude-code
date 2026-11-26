@@ -39,16 +39,15 @@ export function repoResolver(): ResolveRepo {
     const remote =
       git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
     // A repository with no remote (not pushed yet, or local only) goes by
-    // its folder's name. A folder outside any repository stays skipped: it
-    // is often the parent of several, whose activity belongs to them. So
-    // One with no remote in a temporary folder (an agent's `git init` in
-    // /tmp, a scratchpad, a worktree) would be a project of its own: it is
-    // marked, so `toHeartbeats` gives its time to the session's project,
-    // and with none to one project, `scratch`, which inlinr marks temporary.
-    const temporary = !remote && isTemporaryRoot(root);
+    // its folder's name, or as `scratch` (which inlinr marks temporary)
+    // when it sits in a temporary folder: an agent's `git init` in /tmp, a
+    // scratchpad, a worktree. `toHeartbeats` first gives either to the
+    // session's repository with a remote. A folder outside any repository
+    // stays skipped: it is often the parent of several, whose activity
+    // belongs to them.
     const project = remote
       ? undefined
-      : temporary
+      : isTemporaryRoot(root)
         ? SCRATCH_PROJECT
         : basename(root);
     if (!remote && !project) return null;
@@ -60,7 +59,6 @@ export function repoResolver(): ResolveRepo {
       project,
       root,
       branch: branch === "HEAD" ? "" : branch,
-      ...(temporary ? { temporary } : {}),
     };
   };
   return (dir: string) => {

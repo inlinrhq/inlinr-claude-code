@@ -741,7 +741,7 @@ function repoPath(file, root) {
   return f.split("/").filter(Boolean).pop() ?? f;
 }
 var ACTIVITY_WINDOW_MS = 60 * 1000;
-function toHeartbeats(session, resolve, pluginVersion) {
+function toHeartbeats(session, resolve, pluginVersion, memory = {}) {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
   const base = {
     editor: session.tool,
@@ -751,14 +751,24 @@ function toHeartbeats(session, resolve, pluginVersion) {
     ...session.model ? { ai_model: session.model } : {}
   };
   const real = (r) => r?.remote ? r : null;
+  let seen;
+  const seenHere = () => {
+    if (seen === undefined)
+      seen = real(session.cwd ? resolve(session.cwd) : null) ?? session.activity.map((a) => real(a.cwd ? resolve(a.cwd) : null)).find((r) => r != null) ?? session.edits.map((e) => real(resolve(dirname(e.path)))).find((r) => r != null) ?? null;
+    return seen;
+  };
   let home;
   const homeRepo = () => {
-    if (home !== undefined)
-      return home;
-    home = real(session.cwd ? resolve(session.cwd) : null) ?? session.activity.map((a) => real(a.cwd ? resolve(a.cwd) : null)).find((r) => r != null) ?? session.edits.map((e) => real(resolve(dirname(e.path)))).find((r) => r != null) ?? null;
+    if (home === undefined)
+      home = seenHere() ?? real(memory.home ? resolve(memory.home) : null) ?? null;
     return home;
   };
-  const attach = (r) => r && !r.remote ? homeRepo() ?? r : r;
+  const attach = (r) => {
+    if (!r || r.remote)
+      return r;
+    const to = homeRepo();
+    return to ? { ...to, root: r.root, branch: r.branch || to.branch } : r;
+  };
   const edits = coalesceEdits(session.edits).flatMap((edit) => {
     const repo = attach(resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null));
     return repo ? [{ edit, repo }] : [];
@@ -798,7 +808,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
     const repo = attach(a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
     if (!repo)
       continue;
-    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+    const key = `${repo.remote}|${repo.project}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
     const found = windows.get(key);
     if (found && found.time * 1000 >= at)
       continue;
@@ -823,6 +833,9 @@ function toHeartbeats(session, resolve, pluginVersion) {
     last.ai_cache_read_tokens = t.cacheRead;
     last.ai_cache_write_tokens = t.cacheWrite;
   }
+  const here = seenHere();
+  if (here)
+    memory.home = here.root;
   return beats.sort((a, b) => a.time - b.time);
 }
 function hideNames(beats, hide) {
@@ -1922,8 +1935,7 @@ function repoResolver() {
     if (!root)
       return null;
     const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
-    const temporary = !remote && isTemporaryRoot(root);
-    const project = remote ? undefined : temporary ? SCRATCH_PROJECT : basename2(root);
+    const project = remote ? undefined : isTemporaryRoot(root) ? SCRATCH_PROJECT : basename2(root);
     if (!remote && !project)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -1931,8 +1943,7 @@ function repoResolver() {
       remote,
       project,
       root,
-      branch: branch === "HEAD" ? "" : branch,
-      ...temporary ? { temporary } : {}
+      branch: branch === "HEAD" ? "" : branch
     };
   };
   return (dir) => {
@@ -2036,9 +2047,15 @@ async function sync(config, throttleSeconds) {
         carry: session?.carry ?? state?.carry ?? null
       };
     }
+    const kept = files[t.key];
+    if (kept && state?.home)
+      kept.home = state.home;
     if (!session || isEmpty(session))
       continue;
-    beats.push(...toHeartbeats(session, resolve, VERSION));
+    const memory = { home: state?.home };
+    beats.push(...toHeartbeats(session, resolve, VERSION, memory));
+    if (kept && memory.home)
+      kept.home = memory.home;
   }
   const behavior = machineBehavior();
   const sendable = behavior.pausedUntil ? [] : hideNames(beats, behavior);

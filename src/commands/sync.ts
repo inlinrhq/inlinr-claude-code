@@ -137,9 +137,14 @@ export async function sync(
         carry: session?.carry ?? state?.carry ?? null,
       };
     }
+    // The session's repository, kept for the reads to come.
+    const kept = files[t.key];
+    if (kept && state?.home) kept.home = state.home;
     if (!session || isEmpty(session)) continue;
 
-    beats.push(...toHeartbeats(session, resolve, VERSION));
+    const memory = { home: state?.home };
+    beats.push(...toHeartbeats(session, resolve, VERSION, memory));
+    if (kept && memory.home) kept.home = memory.home;
   }
 
   // Paused on this machine (`inlinr pause`, or Pause tracking in VS Code):

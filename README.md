@@ -346,7 +346,9 @@ project to attribute it to. A repository with no remote (local only, or not
 pushed yet) is tracked under its folder's name; the path is never sent.
 When the same session also works in a repository with a remote, its time
 goes to that repository instead: it is an agent's copy of it (a worktree
-copied for a ticket, a `git init` in a temporary folder).
+copied for a ticket, a `git init` in a temporary folder). Its files keep
+their paths from the copy's root and its branch. A new repository you
+start inside such a session counts there too, until it has a remote.
 One with no remote in a temporary folder (the system's temp folder, a
 scratchpad, `.claude/worktrees/`, a cache) is an agent's or a quick test's:
 when the session has no repository with a remote, its time goes to a

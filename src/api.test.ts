@@ -37,7 +37,6 @@ const resolve = (dir: string): Repo | null => {
       remote: "",
       project: "scratch",
       branch: "main",
-      temporary: true,
     };
   }
   if (dir === "/local" || dir.startsWith("/local/")) {
@@ -226,6 +225,46 @@ describe("toHeartbeats", () => {
       activity: [act("2026-08-01T10:01:00Z", "/local")],
     });
     for (const b of toHeartbeats(s, resolve, "0.1.0")) {
+      expect(b.project_git_remote).toBe("git@github.com:a/repo.git");
+    }
+  });
+
+  test("keeps the copy's own paths and branch", () => {
+    const s = session({
+      edits: [edit("/local/src/lib/b.ts", "2026-08-01T10:00:00Z")],
+    });
+    const [b] = toHeartbeats(s, resolve, "0.1.0");
+    expect(b).toMatchObject({
+      project_git_remote: "git@github.com:a/repo.git",
+      entity: "src/lib/b.ts",
+      branch: "main",
+    });
+  });
+
+  test("remembers the session's repository from one read to the next", () => {
+    const memory: { home?: string } = {};
+    toHeartbeats(
+      session({
+        cwd: "/work",
+        edits: [edit("/repo/a.ts", "2026-08-01T10:00:00Z", 5, 2, "/work")],
+      }),
+      resolve,
+      "0.1.0",
+      memory,
+    );
+    expect(memory.home).toBe("/repo");
+    const later = toHeartbeats(
+      session({
+        cwd: "/work",
+        edits: [edit("/local/b.ts", "2026-08-01T10:10:00Z", 5, 2, "/work")],
+        activity: [act("2026-08-01T10:10:00Z", "/local")],
+      }),
+      resolve,
+      "0.1.0",
+      memory,
+    );
+    expect(later).toHaveLength(2);
+    for (const b of later) {
       expect(b.project_git_remote).toBe("git@github.com:a/repo.git");
     }
   });
