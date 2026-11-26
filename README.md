@@ -345,8 +345,9 @@ Work that cannot be tied to any git repository is skipped — there is no
 project to attribute it to. A repository with no remote (local only, or not
 pushed yet) is tracked under its folder's name; the path is never sent.
 One with no remote in a temporary folder (the system's temp folder, a
-scratchpad, `.claude/worktrees/`, a cache) is skipped too: it is an agent's
-or a quick test's, and would show up as a project of its own.
+scratchpad, `.claude/worktrees/`, a cache) is an agent's or a quick test's:
+its time goes to a single project, `scratch`, instead of one project per
+folder.
 
 `hide_file_names = true` under `[behavior]` in `~/.inlinr/config.toml` sends
 every file as `HIDDEN.<ext>` (the language is still known), and

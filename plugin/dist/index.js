@@ -1873,6 +1873,7 @@ import { basename as basename2, dirname as dirname2 } from "node:path";
 
 // src/temporary.ts
 import { tmpdir } from "node:os";
+var SCRATCH_PROJECT = "scratch";
 function isTemporaryRoot(root, temp = tmpdir()) {
   const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   const path = norm(root);
@@ -1912,9 +1913,7 @@ function repoResolver() {
     if (!root)
       return null;
     const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
-    if (!remote && isTemporaryRoot(root))
-      return null;
-    const project = remote ? undefined : basename2(root);
+    const project = remote ? undefined : isTemporaryRoot(root) ? SCRATCH_PROJECT : basename2(root);
     if (!remote && !project)
       return null;
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
