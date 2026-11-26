@@ -28,9 +28,17 @@ const act = (at: string, cwd = "/repo") => ({ at, cwd });
 
 /**
  * `/repo` and `/other` are repositories; `/work`, their parent, is not;
- * `/local` is a repository with no remote.
+ * `/local` is a repository with no remote; `/tmp/kw-2202` an agent's.
  */
 const resolve = (dir: string): Repo | null => {
+  if (dir === "/tmp/kw-2202" || dir.startsWith("/tmp/kw-2202/")) {
+    return {
+      root: "/tmp/kw-2202",
+      remote: "",
+      project: "scratch",
+      branch: "main",
+    };
+  }
   if (dir === "/local" || dir.startsWith("/local/")) {
     return { root: "/local", remote: "", project: "local", branch: "main" };
   }
@@ -195,6 +203,90 @@ describe("toHeartbeats", () => {
       category: "ai-coding",
       branch: "main",
     });
+  });
+
+  test("gives a temporary folder's time to the session's project", () => {
+    const s = session({
+      edits: [edit("/tmp/kw-2202/a.ts", "2026-08-01T10:00:00Z")],
+      activity: [act("2026-08-01T10:01:00Z", "/tmp/kw-2202")],
+    });
+    const beats = toHeartbeats(s, resolve, "0.1.0");
+    expect(beats).toHaveLength(2);
+    for (const b of beats) {
+      expect(b.project_git_remote).toBe("git@github.com:a/repo.git");
+      expect(b.project).toBeUndefined();
+    }
+    expect(beats[0]?.entity).toBe("a.ts");
+  });
+
+  test("gives an agent's copy with no remote to the session's repository", () => {
+    const s = session({
+      edits: [edit("/local/a.ts", "2026-08-01T10:00:00Z")],
+      activity: [act("2026-08-01T10:01:00Z", "/local")],
+    });
+    for (const b of toHeartbeats(s, resolve, "0.1.0")) {
+      expect(b.project_git_remote).toBe("git@github.com:a/repo.git");
+    }
+  });
+
+  test("keeps the copy's own paths and branch", () => {
+    const s = session({
+      edits: [edit("/local/src/lib/b.ts", "2026-08-01T10:00:00Z")],
+    });
+    const [b] = toHeartbeats(s, resolve, "0.1.0");
+    expect(b).toMatchObject({
+      project_git_remote: "git@github.com:a/repo.git",
+      entity: "src/lib/b.ts",
+      branch: "main",
+    });
+  });
+
+  test("remembers the session's repository from one read to the next", () => {
+    const memory: { home?: string } = {};
+    toHeartbeats(
+      session({
+        cwd: "/work",
+        edits: [edit("/repo/a.ts", "2026-08-01T10:00:00Z", 5, 2, "/work")],
+      }),
+      resolve,
+      "0.1.0",
+      memory,
+    );
+    expect(memory.home).toBe("/repo");
+    const later = toHeartbeats(
+      session({
+        cwd: "/work",
+        edits: [edit("/local/b.ts", "2026-08-01T10:10:00Z", 5, 2, "/work")],
+        activity: [act("2026-08-01T10:10:00Z", "/local")],
+      }),
+      resolve,
+      "0.1.0",
+      memory,
+    );
+    expect(later).toHaveLength(2);
+    for (const b of later) {
+      expect(b.project_git_remote).toBe("git@github.com:a/repo.git");
+    }
+  });
+
+  test("keeps a repository with no remote when the session has no other", () => {
+    const s = session({
+      cwd: "/local",
+      edits: [edit("/local/a.ts", "2026-08-01T10:00:00Z", 5, 2, "/local")],
+    });
+    const [b] = toHeartbeats(s, resolve, "0.1.0");
+    expect(b).toMatchObject({ project: "local" });
+  });
+
+  test("sends a temporary folder as scratch when the session has no project", () => {
+    const s = session({
+      cwd: "/tmp/kw-2202",
+      edits: [
+        edit("/tmp/kw-2202/a.ts", "2026-08-01T10:00:00Z", 5, 2, "/tmp/kw-2202"),
+      ],
+    });
+    const [b] = toHeartbeats(s, resolve, "0.1.0");
+    expect(b).toMatchObject({ project: "scratch", entity: "a.ts" });
   });
 
   test("attributes an edit to the repository its file is in", () => {

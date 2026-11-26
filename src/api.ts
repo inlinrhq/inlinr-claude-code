@@ -228,6 +228,13 @@ export function toHeartbeats(
   session: Session,
   resolve: ResolveRepo,
   pluginVersion: string,
+  /**
+   * The root of the session's repository with a remote, kept from one read
+   * of its file to the next: a read covers the last minutes only, and a
+   * copy edited alone in one must still go to that repository. Set here
+   * when this read finds one.
+   */
+  memory: { home?: string } = {},
 ): Heartbeat[] {
   const plugin = `claude-code-inlinr/${pluginVersion}`;
   const base = {
@@ -238,9 +245,46 @@ export function toHeartbeats(
     ...(session.model ? { ai_model: session.model } : {}),
   };
 
+  // A repository with no remote in a session that also works in one with
+  // a remote is an agent's copy of it (a worktree copied for a ticket,
+  // `kw-2202`, a `git init` in /tmp): its time goes to that repository.
+  // The session's starting folder first, else the first repository with a
+  // remote it stood in or edited, else the one an earlier read of the
+  // session found. With none, a temporary one goes as `scratch` and any
+  // other by its folder's name.
+  const real = (r: Repo | null) => (r?.remote ? r : null);
+  let seen: Repo | null | undefined;
+  const seenHere = (): Repo | null => {
+    if (seen === undefined)
+      seen =
+        real(session.cwd ? resolve(session.cwd) : null) ??
+        session.activity
+          .map((a) => real(a.cwd ? resolve(a.cwd) : null))
+          .find((r) => r != null) ??
+        session.edits
+          .map((e) => real(resolve(dirname(e.path))))
+          .find((r) => r != null) ??
+        null;
+    return seen;
+  };
+  let home: Repo | null | undefined;
+  const homeRepo = (): Repo | null => {
+    if (home === undefined)
+      home =
+        seenHere() ?? real(memory.home ? resolve(memory.home) : null) ?? null;
+    return home;
+  };
+  // The copy keeps its own root, for its files' paths, and its branch.
+  const attach = (r: Repo | null): Repo | null => {
+    if (!r || r.remote) return r;
+    const to = homeRepo();
+    return to ? { ...to, root: r.root, branch: r.branch || to.branch } : r;
+  };
+
   const edits = coalesceEdits(session.edits).flatMap((edit) => {
-    const repo =
-      resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null);
+    const repo = attach(
+      resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null),
+    );
     return repo ? [{ edit, repo }] : [];
   });
 
@@ -280,9 +324,10 @@ export function toHeartbeats(
   for (const a of session.activity) {
     const at = Date.parse(a.at);
     if (Number.isNaN(at)) continue;
-    const repo = (a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
+    const repo = attach(a.cwd ? resolve(a.cwd) : null) ?? nearestEdit(at);
     if (!repo) continue;
-    const key = `${repo.root}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
+    // By project: an attached copy shares its repository's minute.
+    const key = `${repo.remote}|${repo.project}|${Math.floor(at / ACTIVITY_WINDOW_MS)}`;
     const found = windows.get(key);
     // The latest moment in the window, like file beats.
     if (found && found.time * 1000 >= at) continue;
@@ -309,6 +354,9 @@ export function toHeartbeats(
     last.ai_cache_read_tokens = t.cacheRead;
     last.ai_cache_write_tokens = t.cacheWrite;
   }
+
+  const here = seenHere();
+  if (here) memory.home = here.root;
 
   return beats.sort((a, b) => a.time - b.time);
 }

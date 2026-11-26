@@ -31,6 +31,8 @@ export type FileState = {
   carry?: Carry | null;
   /** What Codex or Gemini CLI's parser carries from one read to the next. */
   agent?: unknown;
+  /** The session's repository with a remote, its root (`toHeartbeats`). */
+  home?: string;
 };
 
 export type Config = {

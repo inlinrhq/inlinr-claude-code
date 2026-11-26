@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type { Repo, ResolveRepo } from "./api";
+import { isTemporaryRoot, SCRATCH_PROJECT } from "./temporary";
 
 function git(cwd: string, args: string[]): string {
   try {
@@ -38,14 +39,27 @@ export function repoResolver(): ResolveRepo {
     const remote =
       git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
     // A repository with no remote (not pushed yet, or local only) goes by
-    // its folder's name. A folder outside any repository stays skipped: it
-    // is often the parent of several, whose activity belongs to them.
-    const project = remote ? undefined : basename(root);
+    // its folder's name, or as `scratch` (which inlinr marks temporary)
+    // when it sits in a temporary folder: an agent's `git init` in /tmp, a
+    // scratchpad, a worktree. `toHeartbeats` first gives either to the
+    // session's repository with a remote. A folder outside any repository
+    // stays skipped: it is often the parent of several, whose activity
+    // belongs to them.
+    const project = remote
+      ? undefined
+      : isTemporaryRoot(root)
+        ? SCRATCH_PROJECT
+        : basename(root);
     if (!remote && !project) return null;
     // Checked out now, not when the line was written — the transcript's
     // own `gitBranch` is the starting folder's, wrong for any other repo.
     const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    return { remote, project, root, branch: branch === "HEAD" ? "" : branch };
+    return {
+      remote,
+      project,
+      root,
+      branch: branch === "HEAD" ? "" : branch,
+    };
   };
   return (dir: string) => {
     let d = dir;
