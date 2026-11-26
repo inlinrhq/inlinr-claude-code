@@ -750,7 +750,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
     ai_session: session.id,
     ...session.model ? { ai_model: session.model } : {}
   };
-  const real = (r) => r && !r.temporary ? r : null;
+  const real = (r) => r?.remote ? r : null;
   let home;
   const homeRepo = () => {
     if (home !== undefined)
@@ -758,7 +758,7 @@ function toHeartbeats(session, resolve, pluginVersion) {
     home = real(session.cwd ? resolve(session.cwd) : null) ?? session.activity.map((a) => real(a.cwd ? resolve(a.cwd) : null)).find((r) => r != null) ?? session.edits.map((e) => real(resolve(dirname(e.path)))).find((r) => r != null) ?? null;
     return home;
   };
-  const attach = (r) => r?.temporary ? homeRepo() ?? r : r;
+  const attach = (r) => r && !r.remote ? homeRepo() ?? r : r;
   const edits = coalesceEdits(session.edits).flatMap((edit) => {
     const repo = attach(resolve(dirname(edit.path)) ?? (edit.cwd ? resolve(edit.cwd) : null));
     return repo ? [{ edit, repo }] : [];

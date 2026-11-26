@@ -344,11 +344,13 @@ writes on your machine — and from Codex's and Gemini CLI's session files:
 Work that cannot be tied to any git repository is skipped — there is no
 project to attribute it to. A repository with no remote (local only, or not
 pushed yet) is tracked under its folder's name; the path is never sent.
+When the same session also works in a repository with a remote, its time
+goes to that repository instead: it is an agent's copy of it (a worktree
+copied for a ticket, a `git init` in a temporary folder).
 One with no remote in a temporary folder (the system's temp folder, a
 scratchpad, `.claude/worktrees/`, a cache) is an agent's or a quick test's:
-its time goes to the project the session is about (the repository it
-started in), or to a single project, `scratch`, when there is none: never
-one project per folder.
+when the session has no repository with a remote, its time goes to a
+single project, `scratch`, never one project per folder.
 
 `hide_file_names = true` under `[behavior]` in `~/.inlinr/config.toml` sends
 every file as `HIDDEN.<ext>` (the language is still known), and

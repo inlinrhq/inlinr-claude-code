@@ -240,11 +240,13 @@ export function toHeartbeats(
     ...(session.model ? { ai_model: session.model } : {}),
   };
 
-  // A temporary repository (an agent's `git init` in /tmp, a scratchpad)
-  // is work for the project the session is about: its time goes there. The
-  // session's starting folder first, else the first real repository it
-  // stood in or edited; with none, the temporary one goes as `scratch`.
-  const real = (r: Repo | null) => (r && !r.temporary ? r : null);
+  // A repository with no remote in a session that also works in one with
+  // a remote is an agent's copy of it (a worktree copied for a ticket,
+  // `kw-2202`, a `git init` in /tmp): its time goes to that repository.
+  // The session's starting folder first, else the first repository with a
+  // remote it stood in or edited. With none, a temporary one goes as
+  // `scratch` and any other by its folder's name.
+  const real = (r: Repo | null) => (r?.remote ? r : null);
   let home: Repo | null | undefined;
   const homeRepo = (): Repo | null => {
     if (home !== undefined) return home;
@@ -260,7 +262,7 @@ export function toHeartbeats(
     return home;
   };
   const attach = (r: Repo | null): Repo | null =>
-    r?.temporary ? (homeRepo() ?? r) : r;
+    r && !r.remote ? (homeRepo() ?? r) : r;
 
   const edits = coalesceEdits(session.edits).flatMap((edit) => {
     const repo = attach(

@@ -220,6 +220,25 @@ describe("toHeartbeats", () => {
     expect(beats[0]?.entity).toBe("a.ts");
   });
 
+  test("gives an agent's copy with no remote to the session's repository", () => {
+    const s = session({
+      edits: [edit("/local/a.ts", "2026-08-01T10:00:00Z")],
+      activity: [act("2026-08-01T10:01:00Z", "/local")],
+    });
+    for (const b of toHeartbeats(s, resolve, "0.1.0")) {
+      expect(b.project_git_remote).toBe("git@github.com:a/repo.git");
+    }
+  });
+
+  test("keeps a repository with no remote when the session has no other", () => {
+    const s = session({
+      cwd: "/local",
+      edits: [edit("/local/a.ts", "2026-08-01T10:00:00Z", 5, 2, "/local")],
+    });
+    const [b] = toHeartbeats(s, resolve, "0.1.0");
+    expect(b).toMatchObject({ project: "local" });
+  });
+
   test("sends a temporary folder as scratch when the session has no project", () => {
     const s = session({
       cwd: "/tmp/kw-2202",

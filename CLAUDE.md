@@ -125,13 +125,15 @@ cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_
   to `~/.inlinr/agents.js` and adds Codex's `notify` or Gemini CLI's
   `AfterAgent` / `SessionEnd` hooks; `--detach` returns at once (Gemini CLI
   waits for its hooks) and the plugin refreshes that copy when it is newer.
-- A repository with no remote whose root is in a temporary folder
-  (`isTemporaryRoot`, `src/temporary.ts`: the system's temp folder, a
-  scratchpad, `.claude/worktrees/`, `.cache`) is `temporary`: its time goes
-  to the session's project (its starting folder's repository, else the
-  first real one it stood in or edited, `toHeartbeats`), else to the
-  project `scratch` (`SCRATCH_PROJECT`), never its folder's name. The
-  extension's `folder-project.ts` sends `scratch` (it has no session).
+- A repository with no remote, in a session that also works in one with a
+  remote, is an agent's copy of it: its time goes to that one (the starting
+  folder's repository, else the first with a remote the session stood in
+  or edited; `toHeartbeats`). With none, one whose root is in a temporary
+  folder (`isTemporaryRoot`, `src/temporary.ts`: the system's temp folder,
+  a scratchpad, `.claude/worktrees/`, `.cache`) is sent as `scratch`
+  (`SCRATCH_PROJECT`), any other by its folder's name. The extension's
+  `folder-project.ts` sends `scratch` for a temporary folder (it has no
+  session).
 - Work outside any git repository is skipped (no project to put it in; it
   is often the parent folder of several). A repository with no remote is
   sent as `project`, its folder's name (needs inlinr-web with `project`).
