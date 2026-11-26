@@ -1117,7 +1117,7 @@ async function reportError(context, err, opts) {
 }
 
 // src/version.ts
-var VERSION = "0.10.0";
+var VERSION = "0.10.1";
 
 // src/failure.ts
 var logPath = () => join6(configDir(), "claude-code.log");
