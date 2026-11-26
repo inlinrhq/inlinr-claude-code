@@ -1870,6 +1870,24 @@ function parseGemini(content, options = {}) {
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync3 } from "node:fs";
 import { basename as basename2, dirname as dirname2 } from "node:path";
+
+// src/temporary.ts
+import { tmpdir } from "node:os";
+function isTemporaryRoot(root, temp = tmpdir()) {
+  const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const path = norm(root);
+  const system = norm(temp);
+  if (system && (path === system || path.startsWith(`${system}/`))) {
+    return true;
+  }
+  if (/^(\/private)?\/(tmp|var\/tmp|var\/folders)(\/|$)/.test(path) || /^[a-z]:\/(windows\/)?te?mp(\/|$)/.test(path)) {
+    return true;
+  }
+  const parts = path.split("/");
+  return parts.some((s, i) => s === "scratchpad" || s === ".cache" || s === ".claude" && parts[i + 1] === "worktrees" || s === "appdata" && parts[i + 1] === "local" && parts[i + 2] === "temp");
+}
+
+// src/repo.ts
 function git(cwd, args) {
   try {
     return execFileSync2("git", args, {
@@ -1894,6 +1912,8 @@ function repoResolver() {
     if (!root)
       return null;
     const remote = git(root, ["remote", "get-url", "origin"]) || firstRemote(root);
+    if (!remote && isTemporaryRoot(root))
+      return null;
     const project = remote ? undefined : basename2(root);
     if (!remote && !project)
       return null;

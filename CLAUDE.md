@@ -125,6 +125,11 @@ cloud/            # inlinr-cloud: mcp_tool hooks calling the connector's record_
   to `~/.inlinr/agents.js` and adds Codex's `notify` or Gemini CLI's
   `AfterAgent` / `SessionEnd` hooks; `--detach` returns at once (Gemini CLI
   waits for its hooks) and the plugin refreshes that copy when it is newer.
+- A repository with no remote whose root is in a temporary folder
+  (`isTemporaryRoot`, `src/temporary.ts`: the system's temp folder, a
+  scratchpad, `.claude/worktrees/`, `.cache`) is skipped like a folder
+  outside any repository; the extension's `folder-project.ts` has the same
+  rule.
 - Work outside any git repository is skipped (no project to put it in; it
   is often the parent folder of several). A repository with no remote is
   sent as `project`, its folder's name (needs inlinr-web with `project`).
